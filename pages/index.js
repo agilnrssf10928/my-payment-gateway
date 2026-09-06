@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 
-// Simulasi database dari GitHub
-const GITHUB_DB_URL = 'https://raw.githubusercontent.com/agilnrssf10928/PAYMENT-/refs/heads/main/database.json'
+// Gunakan localStorage sebagai database utama
+const STORAGE_KEY = 'payment_gateway_users'
+const TRANSACTIONS_KEY = 'payment_gateway_transactions'
 
 export default function Home() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -10,8 +11,6 @@ export default function Home() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
-
-  // Register state
   const [regData, setRegData] = useState({
     name: '',
     email: '',
@@ -19,80 +18,159 @@ export default function Home() {
     password: '',
     confirmPassword: ''
   })
+  const [loading, setLoading] = useState(false)
+
+  // Load data dari GitHub saat pertama kali
+  const loadUsersFromGitHub = async () => {
+    try {
+      const response = await fetch('https://raw.githubusercontent.com/agilnrssf10928/PAYMENT-/refs/heads/main/database.json')
+      const data = await response.json()
+      
+      if (data && data.users) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.users))
+        console.log('Users loaded from GitHub:', data.users.length)
+      }
+      return data?.users || []
+    } catch (err) {
+      console.error('Error loading from GitHub:', err)
+      // Jika gagal, coba dari localStorage
+      const localUsers = localStorage.getItem(STORAGE_KEY)
+      if (localUsers) {
+        return JSON.parse(localUsers)
+      }
+      return []
+    }
+  }
+
+  // Ambil semua users
+  const getUsers = () => {
+    const users = localStorage.getItem(STORAGE_KEY)
+    return users ? JSON.parse(users) : []
+  }
+
+  // Simpan users
+  const saveUsers = (users) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(users))
+  }
 
   useEffect(() => {
+    // Cek login status
     const token = localStorage.getItem('token')
     const userData = localStorage.getItem('user')
     if (token && userData) {
       setIsLoggedIn(true)
       setUser(JSON.parse(userData))
     }
+
+    // Load data dari GitHub
+    loadUsersFromGitHub()
   }, [])
 
   const handleLogin = async (e) => {
     e.preventDefault()
     setError('')
+    setLoading(true)
     
     try {
-      const response = await fetch(GITHUB_DB_URL)
-      const data = await response.json()
-      
-      const foundUser = data.users?.find(u => u.email === email && u.password === password)
+      // Load users dari GitHub
+      const users = await loadUsersFromGitHub()
+      const foundUser = users.find(u => u.email === email && u.password === password)
       
       if (foundUser) {
         localStorage.setItem('token', 'dummy-token-' + Date.now())
         localStorage.setItem('user', JSON.stringify(foundUser))
         setIsLoggedIn(true)
         setUser(foundUser)
+        setLoading(false)
       } else {
         setError('Email atau password salah')
+        setLoading(false)
       }
     } catch (err) {
       setError('Terjadi kesalahan. Silakan coba lagi.')
+      setLoading(false)
     }
   }
 
   const handleRegister = async (e) => {
     e.preventDefault()
     setError('')
+    setLoading(true)
+
+    // Validasi
+    if (!regData.name || !regData.email || !regData.phone || !regData.password) {
+      setError('Semua field harus diisi!')
+      setLoading(false)
+      return
+    }
 
     if (regData.password !== regData.confirmPassword) {
-      setError('Password tidak cocok')
+      setError('Password tidak cocok!')
+      setLoading(false)
+      return
+    }
+
+    if (regData.password.length < 6) {
+      setError('Password minimal 6 karakter!')
+      setLoading(false)
       return
     }
 
     try {
-      const response = await fetch(GITHUB_DB_URL)
-      const data = await response.json()
+      // Ambil users dari localStorage
+      let users = getUsers()
       
-      if (data.users?.find(u => u.email === regData.email)) {
-        setError('Email sudah terdaftar')
+      // Cek email sudah terdaftar
+      if (users.find(u => u.email === regData.email)) {
+        setError('Email sudah terdaftar!')
+        setLoading(false)
         return
       }
 
+      // Cek phone sudah terdaftar
+      if (users.find(u => u.phone === regData.phone)) {
+        setError('Nomor telepon sudah terdaftar!')
+        setLoading(false)
+        return
+      }
+
+      // Buat user baru
       const newUser = {
-        id: Date.now().toString(),
-        name: regData.name,
-        email: regData.email,
-        phone: regData.phone,
+        id: 'user_' + Date.now(),
+        name: regData.name.trim(),
+        email: regData.email.trim(),
+        phone: regData.phone.trim(),
         password: regData.password,
         balance: 0,
         createdAt: new Date().toISOString()
       }
 
-      // Simpan ke localStorage untuk demo
-      const allUsers = data.users || []
-      allUsers.push(newUser)
-      
-      // Untuk demo, kita simpan di localStorage
-      localStorage.setItem('users', JSON.stringify(allUsers))
-      localStorage.setItem('user', JSON.stringify(newUser))
+      // Simpan ke localStorage
+      users.push(newUser)
+      saveUsers(users)
+
+      // Simpan data user yang login
       localStorage.setItem('token', 'dummy-token-' + Date.now())
+      localStorage.setItem('user', JSON.stringify(newUser))
       
+      // Reset form
+      setRegData({
+        name: '',
+        email: '',
+        phone: '',
+        password: '',
+        confirmPassword: ''
+      })
+
       setIsLoggedIn(true)
       setUser(newUser)
+      setLoading(false)
+      
+      alert('🎉 Pendaftaran berhasil! Selamat datang ' + newUser.name)
     } catch (err) {
+      console.error('Register error:', err)
       setError('Terjadi kesalahan. Silakan coba lagi.')
+      setLoading(false)
     }
   }
 
@@ -105,12 +183,15 @@ export default function Home() {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-md w-full space-y-8 bg-white p-8 rounded-lg shadow-lg">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-md w-full space-y-8 bg-white p-8 rounded-2xl shadow-2xl">
           <div>
-            <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-              {showRegister ? 'Daftar Akun' : 'Login ke Payment Gateway'}
+            <h2 className="text-center text-3xl font-extrabold text-gray-900">
+              {showRegister ? '✨ Daftar Akun' : '🔐 Login ke Payment Gateway'}
             </h2>
+            <p className="mt-2 text-center text-sm text-gray-600">
+              {showRegister ? 'Buat akun untuk mulai bertransaksi' : 'Masuk ke akun Anda'}
+            </p>
           </div>
           
           {!showRegister ? (
@@ -124,6 +205,7 @@ export default function Home() {
                     placeholder="Email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    disabled={loading}
                   />
                 </div>
                 <div>
@@ -134,20 +216,24 @@ export default function Home() {
                     placeholder="Password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    disabled={loading}
                   />
                 </div>
               </div>
 
               {error && (
-                <div className="text-red-500 text-sm text-center">{error}</div>
+                <div className="text-red-500 text-sm text-center bg-red-50 p-2 rounded">
+                  ❌ {error}
+                </div>
               )}
 
               <div>
                 <button
                   type="submit"
-                  className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  disabled={loading}
+                  className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
                 >
-                  Login
+                  {loading ? '⏳ Loading...' : 'Login'}
                 </button>
               </div>
             </form>
@@ -162,6 +248,7 @@ export default function Home() {
                     placeholder="Nama Lengkap"
                     value={regData.name}
                     onChange={(e) => setRegData({...regData, name: e.target.value})}
+                    disabled={loading}
                   />
                 </div>
                 <div>
@@ -172,6 +259,7 @@ export default function Home() {
                     placeholder="Email"
                     value={regData.email}
                     onChange={(e) => setRegData({...regData, email: e.target.value})}
+                    disabled={loading}
                   />
                 </div>
                 <div>
@@ -182,6 +270,7 @@ export default function Home() {
                     placeholder="Nomor Telepon"
                     value={regData.phone}
                     onChange={(e) => setRegData({...regData, phone: e.target.value})}
+                    disabled={loading}
                   />
                 </div>
                 <div>
@@ -189,9 +278,10 @@ export default function Home() {
                     type="password"
                     required
                     className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                    placeholder="Password"
+                    placeholder="Password (min 6 karakter)"
                     value={regData.password}
                     onChange={(e) => setRegData({...regData, password: e.target.value})}
+                    disabled={loading}
                   />
                 </div>
                 <div>
@@ -202,20 +292,24 @@ export default function Home() {
                     placeholder="Konfirmasi Password"
                     value={regData.confirmPassword}
                     onChange={(e) => setRegData({...regData, confirmPassword: e.target.value})}
+                    disabled={loading}
                   />
                 </div>
               </div>
 
               {error && (
-                <div className="text-red-500 text-sm text-center">{error}</div>
+                <div className="text-red-500 text-sm text-center bg-red-50 p-2 rounded">
+                  ❌ {error}
+                </div>
               )}
 
               <div>
                 <button
                   type="submit"
-                  className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  disabled={loading}
+                  className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
                 >
-                  Daftar
+                  {loading ? '⏳ Proses...' : 'Daftar'}
                 </button>
               </div>
             </form>
@@ -228,6 +322,7 @@ export default function Home() {
                 setError('')
               }}
               className="text-sm text-blue-600 hover:text-blue-500"
+              disabled={loading}
             >
               {showRegister ? 'Sudah punya akun? Login di sini' : 'Belum punya akun? Daftar di sini'}
             </button>
@@ -240,7 +335,6 @@ export default function Home() {
   return <Dashboard user={user} onLogout={handleLogout} />
 }
 
-// Dashboard Component
 function Dashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [balance, setBalance] = useState(user?.balance || 0)
@@ -255,14 +349,14 @@ function Dashboard({ user, onLogout }) {
   const [qrisCode, setQrisCode] = useState('')
   const [showQRIS, setShowQRIS] = useState(false)
 
-  const banks = ['BCA', 'BNI', 'BRI', 'Mandiri', 'BTN', 'CIMB Niaga', 'Danamon', 'Permata', 'Maybank', 'Bank Mega', 'Bank Sinarmas', 'Bank DBS', 'Bank UOB']
+  const banks = ['BCA', 'BNI', 'BRI', 'Mandiri', 'BTN', 'CIMB Niaga', 'Danamon', 'Permata', 'Maybank', 'Bank Mega', 'Bank Sinarmas']
 
   useEffect(() => {
-    const savedTransactions = localStorage.getItem('transactions')
+    const savedTransactions = localStorage.getItem('transactions_' + user.id)
     if (savedTransactions) {
       setTransactions(JSON.parse(savedTransactions))
     }
-    const savedBalance = localStorage.getItem(`balance_${user?.id}`)
+    const savedBalance = localStorage.getItem(`balance_${user.id}`)
     if (savedBalance) {
       setBalance(parseFloat(savedBalance))
     }
@@ -271,72 +365,81 @@ function Dashboard({ user, onLogout }) {
   const handleTransfer = (e) => {
     e.preventDefault()
     
+    if (!transferData.bank || !transferData.accountNumber || !transferData.amount) {
+      alert('Semua field harus diisi!')
+      return
+    }
+
+    if (parseFloat(transferData.amount) <= 0) {
+      alert('Jumlah transfer harus lebih dari 0!')
+      return
+    }
+
     if (parseFloat(transferData.amount) > balance) {
-      alert('Saldo tidak mencukupi!')
+      alert('Saldo tidak mencukupi! Saldo Anda: Rp' + balance.toLocaleString())
       return
     }
 
     const newTransaction = {
-      id: Date.now().toString(),
+      id: 'tx_' + Date.now(),
       type: 'transfer',
       amount: -parseFloat(transferData.amount),
       bank: transferData.bank,
       accountNumber: transferData.accountNumber,
-      note: transferData.note,
+      note: transferData.note || '-',
       date: new Date().toISOString(),
       status: 'completed'
     }
 
     const updatedTransactions = [newTransaction, ...transactions]
     setTransactions(updatedTransactions)
-    localStorage.setItem('transactions', JSON.stringify(updatedTransactions))
+    localStorage.setItem('transactions_' + user.id, JSON.stringify(updatedTransactions))
 
     const newBalance = balance - parseFloat(transferData.amount)
     setBalance(newBalance)
     localStorage.setItem(`balance_${user.id}`, newBalance.toString())
 
-    alert('Transfer berhasil!')
+    alert('✅ Transfer berhasil!\nBank: ' + transferData.bank + '\nJumlah: Rp' + parseFloat(transferData.amount).toLocaleString())
     setTransferData({ bank: '', accountNumber: '', amount: '', note: '' })
   }
 
-  const generateQRIS = async () => {
+  const generateQRIS = () => {
     if (!qrisAmount || parseFloat(qrisAmount) <= 0) {
       alert('Masukkan jumlah yang valid!')
       return
     }
 
     const qrisData = {
-      id: Date.now().toString(),
+      id: 'qris_' + Date.now(),
       merchant: 'Payment Gateway',
       amount: parseFloat(qrisAmount),
       timestamp: new Date().toISOString(),
       reference: 'QR-' + Date.now()
     }
 
-    try {
-      // Simulasi generate QR code
-      const qrCodeData = JSON.stringify(qrisData)
-      // Untuk demo, kita encode ke base64
-      const qrCode = btoa(qrCodeData)
-      setQrisCode(qrCode)
-      setShowQRIS(true)
-    } catch (err) {
-      alert('Gagal generate QRIS')
-    }
+    const qrCode = btoa(JSON.stringify(qrisData))
+    setQrisCode(qrCode)
+    setShowQRIS(true)
+    
+    alert('✅ QRIS berhasil dibuat!\nJumlah: Rp' + parseFloat(qrisAmount).toLocaleString())
   }
 
   const handleScanQRIS = () => {
-    // Simulasi scan QRIS
     if (!qrisCode) {
-      alert('Silakan generate QRIS terlebih dahulu')
+      alert('Silakan generate QRIS terlebih dahulu!')
       return
     }
 
     try {
       const qrisData = JSON.parse(atob(qrisCode))
       
+      if (!qrisData || !qrisData.amount) {
+        alert('QRIS tidak valid!')
+        return
+      }
+
       const newTransaction = {
-        id: Date.now().toString(),
+        id: 'tx_' + Date.now(),
         type: 'receive',
         amount: qrisData.amount,
         reference: qrisData.reference,
@@ -347,17 +450,18 @@ function Dashboard({ user, onLogout }) {
 
       const updatedTransactions = [newTransaction, ...transactions]
       setTransactions(updatedTransactions)
-      localStorage.setItem('transactions', JSON.stringify(updatedTransactions))
+      localStorage.setItem('transactions_' + user.id, JSON.stringify(updatedTransactions))
 
       const newBalance = balance + qrisData.amount
       setBalance(newBalance)
       localStorage.setItem(`balance_${user.id}`, newBalance.toString())
 
-      alert(`Pembayaran berhasil! +Rp${qrisData.amount.toLocaleString()}`)
+      alert('✅ Pembayaran berhasil!\nJumlah: +Rp' + qrisData.amount.toLocaleString())
       setShowQRIS(false)
       setQrisCode('')
+      setQrisAmount('')
     } catch (err) {
-      alert('QRIS tidak valid!')
+      alert('QRIS tidak valid! Silakan generate ulang.')
     }
   }
 
@@ -371,14 +475,14 @@ function Dashboard({ user, onLogout }) {
 
   return (
     <div className="min-h-screen bg-gray-100">
-      <nav className="bg-blue-600 text-white p-4">
+      <nav className="bg-blue-600 text-white p-4 shadow-lg">
         <div className="max-w-7xl mx-auto flex justify-between items-center flex-wrap">
-          <h1 className="text-2xl font-bold">Payment Gateway</h1>
+          <h1 className="text-2xl font-bold">💰 Payment Gateway</h1>
           <div className="flex items-center space-x-4 flex-wrap">
-            <span className="text-sm">Halo, {user?.name}</span>
+            <span className="text-sm">👋 Halo, {user?.name}</span>
             <button
               onClick={onLogout}
-              className="bg-red-500 px-4 py-2 rounded hover:bg-red-600 text-sm"
+              className="bg-red-500 px-4 py-2 rounded hover:bg-red-600 text-sm transition"
             >
               Logout
             </button>
@@ -399,7 +503,7 @@ function Dashboard({ user, onLogout }) {
             </div>
             <div className="text-center">
               <p className="text-gray-600">Status</p>
-              <p className="text-3xl font-bold text-green-600">Aktif</p>
+              <p className="text-3xl font-bold text-green-600">✅ Aktif</p>
             </div>
           </div>
         </div>
@@ -409,10 +513,19 @@ function Dashboard({ user, onLogout }) {
             {['dashboard', 'transfer', 'qris', 'history', 'profile'].map(tab => (
               <button
                 key={tab}
-                className={`px-4 py-2 rounded capitalize ${activeTab === tab ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'}`}
+                className={`px-4 py-2 rounded capitalize transition ${
+                  activeTab === tab 
+                    ? 'bg-blue-600 text-white shadow-lg' 
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
                 onClick={() => setActiveTab(tab)}
               >
-                {tab}
+                {tab === 'dashboard' && '📊'}
+                {tab === 'transfer' && '💸'}
+                {tab === 'qris' && '📱'}
+                {tab === 'history' && '📜'}
+                {tab === 'profile' && '👤'}
+                {' '}{tab}
               </button>
             ))}
           </div>
@@ -421,18 +534,21 @@ function Dashboard({ user, onLogout }) {
         <div className="bg-white rounded-lg shadow p-6">
           {activeTab === 'dashboard' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">Dashboard</h2>
+              <h2 className="text-xl font-bold mb-4">📊 Dashboard</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-blue-50 p-4 rounded">
+                <div className="bg-blue-50 p-4 rounded-lg">
                   <h3 className="font-semibold mb-2">Saldo Anda</h3>
                   <p className="text-2xl font-bold text-blue-600">{formatCurrency(balance)}</p>
                 </div>
-                <div className="bg-green-50 p-4 rounded">
-                  <h3 className="font-semibold mb-2">QRIS Terakhir</h3>
-                  {transactions.filter(t => t.type === 'receive').length > 0 ? (
-                    <p>QRIS Active</p>
+                <div className="bg-green-50 p-4 rounded-lg">
+                  <h3 className="font-semibold mb-2">Transaksi Terakhir</h3>
+                  {transactions.length > 0 ? (
+                    <p className="text-sm">
+                      {transactions[0].type === 'transfer' ? 'Transfer keluar' : 'Penerimaan'} -{' '}
+                      {formatCurrency(Math.abs(transactions[0].amount))}
+                    </p>
                   ) : (
-                    <p className="text-gray-500">Belum ada QRIS</p>
+                    <p className="text-gray-500">Belum ada transaksi</p>
                   )}
                 </div>
               </div>
@@ -441,7 +557,7 @@ function Dashboard({ user, onLogout }) {
 
           {activeTab === 'transfer' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">Transfer ke Semua Bank</h2>
+              <h2 className="text-xl font-bold mb-4">💸 Transfer ke Semua Bank</h2>
               <form onSubmit={handleTransfer} className="space-y-4 max-w-md">
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Pilih Bank</label>
@@ -465,6 +581,7 @@ function Dashboard({ user, onLogout }) {
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
                     value={transferData.accountNumber}
                     onChange={(e) => setTransferData({...transferData, accountNumber: e.target.value})}
+                    placeholder="Masukkan nomor rekening"
                   />
                 </div>
                 <div>
@@ -476,6 +593,7 @@ function Dashboard({ user, onLogout }) {
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
                     value={transferData.amount}
                     onChange={(e) => setTransferData({...transferData, amount: e.target.value})}
+                    placeholder="Masukkan jumlah"
                   />
                 </div>
                 <div>
@@ -485,11 +603,12 @@ function Dashboard({ user, onLogout }) {
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
                     value={transferData.note}
                     onChange={(e) => setTransferData({...transferData, note: e.target.value})}
+                    placeholder="Catatan transfer"
                   />
                 </div>
                 <button
                   type="submit"
-                  className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
+                  className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
                 >
                   Transfer Sekarang
                 </button>
@@ -499,10 +618,10 @@ function Dashboard({ user, onLogout }) {
 
           {activeTab === 'qris' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">QRIS Payment</h2>
+              <h2 className="text-xl font-bold mb-4">📱 QRIS Payment</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <h3 className="font-semibold mb-2">Buat QRIS</h3>
+                <div className="bg-gray-50 p-6 rounded-lg">
+                  <h3 className="font-semibold mb-4">Buat QRIS</h3>
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700">Jumlah (Rp)</label>
@@ -513,44 +632,47 @@ function Dashboard({ user, onLogout }) {
                         className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
                         value={qrisAmount}
                         onChange={(e) => setQrisAmount(e.target.value)}
+                        placeholder="Masukkan jumlah"
                       />
                     </div>
                     <button
                       onClick={generateQRIS}
-                      className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
+                      className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
                     >
                       Generate QRIS
                     </button>
                   </div>
                 </div>
-                <div>
-                  <h3 className="font-semibold mb-2">Scan QRIS</h3>
-                  <button
-                    onClick={handleScanQRIS}
-                    className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700"
-                  >
-                    Scan & Bayar
-                  </button>
-                  {showQRIS && qrisCode && (
-                    <div className="mt-4 text-center">
-                      <h4 className="font-semibold">QRIS Code</h4>
-                      <div className="bg-gray-100 p-4 rounded mt-2 break-all text-xs">
-                        {qrisCode}
+                <div className="bg-gray-50 p-6 rounded-lg">
+                  <h3 className="font-semibold mb-4">Scan QRIS</h3>
+                  <div className="space-y-4">
+                    <button
+                      onClick={handleScanQRIS}
+                      className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700 transition"
+                    >
+                      Scan & Bayar
+                    </button>
+                    {showQRIS && qrisCode && (
+                      <div className="mt-4 text-center bg-white p-4 rounded-lg border-2 border-green-500">
+                        <p className="text-green-600 font-bold">✅ QRIS Aktif</p>
+                        <p className="text-sm text-gray-600 mt-2">
+                          Jumlah: {formatCurrency(parseFloat(qrisAmount))}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1 break-all">
+                          Code: {qrisCode.substring(0, 30)}...
+                        </p>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard?.writeText(qrisCode)
+                            alert('QRIS code copied!')
+                          }}
+                          className="mt-2 bg-gray-600 text-white px-4 py-2 rounded text-sm hover:bg-gray-700 transition"
+                        >
+                          📋 Copy QRIS Code
+                        </button>
                       </div>
-                      <p className="mt-2 text-sm text-gray-600">
-                        Jumlah: {formatCurrency(parseFloat(qrisAmount))}
-                      </p>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard?.writeText(qrisCode)
-                          alert('QRIS code copied!')
-                        }}
-                        className="mt-2 bg-gray-600 text-white px-4 py-2 rounded text-sm"
-                      >
-                        Copy QRIS Code
-                      </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -558,36 +680,36 @@ function Dashboard({ user, onLogout }) {
 
           {activeTab === 'history' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">History Transaksi</h2>
+              <h2 className="text-xl font-bold mb-4">📜 History Transaksi</h2>
               {transactions.length === 0 ? (
-                <p className="text-gray-500">Belum ada transaksi</p>
+                <p className="text-gray-500 text-center py-8">Belum ada transaksi</p>
               ) : (
                 <div className="space-y-4">
                   {transactions.map((transaction) => (
                     <div
                       key={transaction.id}
-                      className={`p-4 border rounded ${
+                      className={`p-4 border rounded-lg ${
                         transaction.type === 'transfer' ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'
                       }`}
                     >
                       <div className="flex justify-between items-start flex-wrap">
                         <div>
                           <p className="font-semibold">
-                            {transaction.type === 'transfer' ? 'Transfer Keluar' : 'Penerimaan'}
+                            {transaction.type === 'transfer' ? '🔴 Transfer Keluar' : '🟢 Penerimaan'}
                           </p>
                           {transaction.type === 'transfer' ? (
                             <>
-                              <p className="text-sm text-gray-600">Bank: {transaction.bank}</p>
-                              <p className="text-sm text-gray-600">No. Rekening: {transaction.accountNumber}</p>
+                              <p className="text-sm text-gray-600">🏦 Bank: {transaction.bank}</p>
+                              <p className="text-sm text-gray-600">📋 No. Rekening: {transaction.accountNumber}</p>
                             </>
                           ) : (
-                            <p className="text-sm text-gray-600">Pembayaran QRIS</p>
+                            <p className="text-sm text-gray-600">📱 Pembayaran QRIS</p>
                           )}
-                          {transaction.note && (
-                            <p className="text-sm text-gray-600">Catatan: {transaction.note}</p>
+                          {transaction.note && transaction.note !== '-' && (
+                            <p className="text-sm text-gray-600">📝 Catatan: {transaction.note}</p>
                           )}
                           <p className="text-sm text-gray-500">
-                            {new Date(transaction.date).toLocaleString('id-ID')}
+                            🕐 {new Date(transaction.date).toLocaleString('id-ID')}
                           </p>
                         </div>
                         <div className="text-right">
@@ -595,9 +717,7 @@ function Dashboard({ user, onLogout }) {
                             {transaction.type === 'transfer' ? '-' : '+'}
                             {formatCurrency(Math.abs(transaction.amount))}
                           </p>
-                          <p className={`text-sm ${transaction.status === 'completed' ? 'text-green-600' : 'text-yellow-600'}`}>
-                            {transaction.status === 'completed' ? 'Selesai' : 'Pending'}
-                          </p>
+                          <p className="text-sm text-green-600">✅ Selesai</p>
                         </div>
                       </div>
                     </div>
@@ -609,7 +729,7 @@ function Dashboard({ user, onLogout }) {
 
           {activeTab === 'profile' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">Profile</h2>
+              <h2 className="text-xl font-bold mb-4">👤 Profile</h2>
               <div className="space-y-4">
                 <div className="flex items-center space-x-4 flex-wrap">
                   <div className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center text-white text-3xl font-bold">
@@ -617,23 +737,27 @@ function Dashboard({ user, onLogout }) {
                   </div>
                   <div>
                     <h3 className="text-xl font-semibold">{user?.name}</h3>
-                    <p className="text-gray-600">{user?.email}</p>
-                    <p className="text-gray-600">{user?.phone}</p>
+                    <p className="text-gray-600">📧 {user?.email}</p>
+                    <p className="text-gray-600">📱 {user?.phone}</p>
                   </div>
                 </div>
                 <div className="border-t pt-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <p className="text-sm text-gray-600">ID Pengguna</p>
+                      <p className="text-sm text-gray-600">🆔 ID Pengguna</p>
                       <p className="font-mono text-sm">{user?.id}</p>
                     </div>
                     <div>
-                      <p className="text-sm text-gray-600">Bergabung Sejak</p>
+                      <p className="text-sm text-gray-600">📅 Bergabung Sejak</p>
                       <p className="text-sm">
                         {user?.createdAt ? new Date(user.createdAt).toLocaleDateString('id-ID') : '-'}
                       </p>
                     </div>
                   </div>
+                </div>
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <p className="text-sm text-gray-600">💳 Total Saldo</p>
+                  <p className="text-2xl font-bold text-blue-600">{formatCurrency(balance)}</p>
                 </div>
               </div>
             </div>
