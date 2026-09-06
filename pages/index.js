@@ -923,4 +923,137 @@ function Dashboard({ user, onLogout }) {
                 <div className="bg-gray-50 p-6 rounded-lg">
                   <h3 className="font-semibold mb-4">Hasil Scan</h3>
                   {scanResult ? (
-                    <div className="bg-white p-4
+                    <div className="bg-white p-4 rounded-lg border border-green-500">
+                      <p className="text-green-600 font-bold">✅ QRIS Terdeteksi!</p>
+                      <p className="text-sm text-gray-600 mt-2">
+                        Data: {scanResult.substring(0, 100)}...
+                      </p>
+                      {qrData && (
+                        <div className="mt-3 space-y-2">
+                          <p className="text-sm">
+                            <span className="font-semibold">Jumlah:</span>{' '}
+                            {formatCurrency(qrData.amount)}
+                          </p>
+                          <p className="text-sm">
+                            <span className="font-semibold">Merchant:</span>{' '}
+                            {qrData.merchantName || 'Payment Gateway'}
+                          </p>
+                          <p className="text-sm">
+                            <span className="font-semibold">Status:</span>{' '}
+                            <span className="text-green-600">✅ Valid</span>
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <p className="text-gray-500">Belum ada QRIS yang di-scan</p>
+                      <p className="text-sm text-gray-400 mt-2">
+                        Scan QRIS dari aplikasi bank untuk pembayaran
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'history' && (
+            <div>
+              <h2 className="text-xl font-bold mb-4">📜 History Transaksi</h2>
+              {transactions.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-gray-500">Belum ada transaksi</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-96 overflow-y-auto">
+                  {transactions.map((transaction) => (
+                    <div
+                      key={transaction.id}
+                      className={`p-4 border rounded-lg ${
+                        transaction.type === 'transfer' ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start flex-wrap gap-2">
+                        <div className="flex-1">
+                          <p className="font-semibold">
+                            {transaction.type === 'transfer' ? '🔴 Transfer Keluar' : '🟢 Penerimaan'}
+                          </p>
+                          {transaction.bank && (
+                            <p className="text-sm text-gray-600">🏦 Bank: {transaction.bank}</p>
+                          )}
+                          {transaction.accountNumber && (
+                            <p className="text-sm text-gray-600">📋 No. Rekening: {transaction.accountNumber}</p>
+                          )}
+                          {transaction.to && (
+                            <p className="text-sm text-gray-600">👤 Kepada: {transaction.to}</p>
+                          )}
+                          {transaction.from && (
+                            <p className="text-sm text-gray-600">👤 Dari: {transaction.from}</p>
+                          )}
+                          {transaction.note && transaction.note !== '-' && (
+                            <p className="text-sm text-gray-600">📝 Catatan: {transaction.note}</p>
+                          )}
+                          <p className="text-xs text-gray-500 mt-1">
+                            🕐 {new Date(transaction.date).toLocaleString('id-ID')}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className={`font-bold ${transaction.type === 'transfer' ? 'text-red-600' : 'text-green-600'}`}>
+                            {transaction.type === 'transfer' ? '-' : '+'}
+                            {formatCurrency(Math.abs(transaction.amount))}
+                          </p>
+                          <p className="text-xs text-green-600">✅ Selesai</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'profile' && (
+            <div>
+              <h2 className="text-xl font-bold mb-4">👤 Profile</h2>
+              <div className="space-y-4">
+                <div className="flex items-center space-x-4 flex-wrap">
+                  <div className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center text-white text-3xl font-bold">
+                    {user?.name?.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-semibold">{user?.name}</h3>
+                    <p className="text-gray-600">📧 {user?.email}</p>
+                    <p className="text-gray-600">📱 {user?.phone}</p>
+                  </div>
+                </div>
+                <div className="border-t pt-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-sm text-gray-600">🆔 ID Pengguna</p>
+                      <p className="font-mono text-sm break-all">{user?.id}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">📅 Bergabung Sejak</p>
+                      <p className="text-sm">
+                        {user?.createdAt ? new Date(user.createdAt).toLocaleDateString('id-ID', {
+                          day: 'numeric',
+                          month: 'long',
+                          year: 'numeric'
+                        }) : '-'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <p className="text-sm text-gray-600">💳 Total Saldo</p>
+                  <p className="text-2xl font-bold text-blue-600">{formatCurrency(balance)}</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
