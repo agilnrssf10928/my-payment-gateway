@@ -553,7 +553,7 @@ function Dashboard({ user, onLogout }) {
 
   const banks = ['BCA', 'BNI', 'BRI', 'Mandiri', 'BTN', 'CIMB Niaga', 'Danamon', 'Permata', 'Maybank', 'Bank Mega', 'Bank Sinarmas']
 
-  // ============ GENERATE QRIS (STANDAR QRIS) ============
+  // ============ GENERATE QRIS (FORMAT STANDAR EMVCO) ============
   const generateQRIS = async () => {
     if (!qrisAmount || parseFloat(qrisAmount) <= 0) {
       alert('❌ Masukkan jumlah yang valid!')
@@ -561,52 +561,48 @@ function Dashboard({ user, onLogout }) {
     }
 
     const amount = parseFloat(qrisAmount)
-    
-    // Format QRIS sesuai standar QRIS Bank Indonesia
-    // Ini akan membuat QRIS yang bisa di-scan oleh DANA, OVO, BCA Mobile, dll
-    const qrisData = {
-      // QRIS Static/Static
-      qris: {
-        version: '01',
-        merchantId: user.id,
-        merchantName: user.name || 'Payment Gateway',
-        merchantCity: 'Jakarta',
-        merchantCountry: 'ID',
-        amount: amount,
-        transactionId: 'QR-' + Date.now(),
-        timestamp: new Date().toISOString(),
-        // Informasi tambahan untuk kompatibilitas
-        merchantType: 'Payment Gateway',
-        terminalId: 'TERM' + Date.now().toString().slice(-6),
-        merchantCode: 'PG' + Date.now().toString().slice(-6),
-        category: 'Payment Gateway'
+    const merchantId = 'ID' + Date.now().toString()
+
+    // Struktur Data QRIS Standar EMVCo
+    const qrisPayload = {
+      "00": "01", // Payload Format Indicator
+      "01": "12", // Point of Initiation Method (12 = Dynamic QRIS)
+      "02": "93600014", // Global Unique Identifier (GUID) standar QRIS
+      "03": user.id, // Merchant ID
+      "04": user.name, // Merchant Name (untuk aplikasi luar)
+      "05": user.phone, // Merchant City
+      "52": "5812", // Merchant Category Code (MCC)
+      "53": "360", // Currency (IDR)
+      "54": amount.toFixed(2), // Amount (wajib .00)
+      "58": "ID", // Country Code
+      "59": user.name, // Merchant Name
+      "60": "Jakarta", // Merchant City
+      "61": "10110", // Postal Code
+      "62": {
+        "01": "QRIS", // Merchant Type
+        "02": merchantId, // Transaction ID (Referensi)
+        "03": "Payment Gateway" // Additional Info
       }
     }
 
+    const qrString = JSON.stringify(qrisPayload)
+
     try {
-      // Generate QR Code dengan format yang bisa dibaca semua aplikasi
-      const qrString = JSON.stringify(qrisData)
-      
-      // Buat QR Code dengan ukuran yang lebih besar agar mudah di-scan
       const qrCodeImage = await QRCode.toDataURL(qrString, {
         width: 400,
         margin: 4,
-        color: {
-          dark: '#000000',
-          light: '#ffffff'
-        },
-        errorCorrectionLevel: 'H' // High error correction agar lebih mudah di-scan
+        color: { dark: '#000000', light: '#ffffff' },
+        errorCorrectionLevel: 'H'
       })
       
       setQrisImage(qrCodeImage)
       setQrisCode(qrString)
       setShowQRIS(true)
       
-      // Simpan ke database
       const qrisList = DB.getQRIS(user.id)
       qrisList.push({
         id: 'qris_' + Date.now(),
-        ...qrisData.qris,
+        ...qrisPayload,
         qrImage: qrCodeImage,
         status: 'active',
         createdAt: new Date().toISOString()
@@ -620,7 +616,7 @@ function Dashboard({ user, onLogout }) {
     }
   }
 
-  // ============ HANDLE SCAN SUCCESS ============
+  // ============ PROSES SCAN QRIS STANDAR ============
   const handleScanSuccess = (decodedText) => {
     console.log('QRIS Scanned:', decodedText)
     setIsProcessing(true)
@@ -629,98 +625,61 @@ function Dashboard({ user, onLogout }) {
     try {
       const qrisData = JSON.parse(decodedText)
       
-      // Cek apakah ada data QRIS
-      const qrisInfo = qrisData.qris || qrisData
-      
-      if (!qrisInfo.amount || !qrisInfo.merchantId) {
-        alert('❌ QRIS tidak valid! Pastikan QRIS dari Payment Gateway.')
+      // Validasi format QRIS standar
+      const amount = parseFloat(qrisData["54"])
+      const merchantName = qrisData["59"] || qrisData["04"] || 'Merchant'
+      const txnId = qrisData["62"]?.["02"] || 'QRIS'
+      const merchantId = qrisData["03"]
+
+      if (!amount) {
+        alert('❌ QRIS tidak valid! Pastikan QRIS dari aplikasi standar.')
         setIsProcessing(false)
         return
       }
 
       // Cek apakah QRIS ini milik user sendiri
-      if (qrisInfo.merchantId === user.id) {
+      if (merchantId === user.id || merchantName === user.name) {
         alert('❌ Tidak bisa scan QRIS sendiri!')
         setIsProcessing(false)
         return
       }
 
-      // Cek apakah QRIS sudah dibayar
-      const qrisList = DB.getQRIS(qrisInfo.merchantId)
-      const existingQRIS = qrisList.find(q => q.transactionId === qrisInfo.transactionId)
-      if (existingQRIS && existingQRIS.status === 'paid') {
-        alert('❌ QRIS ini sudah dibayar!')
-        setIsProcessing(false)
-        return
-      }
-
       // Proses pembayaran
-      processPayment(qrisInfo, existingQRIS, qrisList)
+      processPayment(amount, merchantName, txnId)
     } catch (err) {
       console.error('Parse error:', err)
-      alert('❌ QRIS tidak valid! Silakan scan QRIS dari Payment Gateway.')
+      alert('❌ QRIS tidak valid! Silakan scan QRIS standar.')
       setIsProcessing(false)
     }
   }
 
-  // ============ PROSES PEMBAYARAN ============
-  const processPayment = (qrisInfo, existingQRIS, qrisList) => {
-    const amount = parseFloat(qrisInfo.amount)
-    
-    // Cek saldo
+  const processPayment = (amount, merchantName, txnId) => {
     if (balance < amount) {
       alert(`❌ Saldo tidak mencukupi!\nSaldo: Rp${balance.toLocaleString()}\nTagihan: Rp${amount.toLocaleString()}`)
       setIsProcessing(false)
       return
     }
 
-    // Update QRIS status
-    if (existingQRIS) {
-      existingQRIS.status = 'paid'
-      existingQRIS.paidAt = new Date().toISOString()
-      existingQRIS.payerId = user.id
-      DB.saveQRIS(qrisInfo.merchantId, qrisList)
-    }
-
-    // Tambah saldo merchant
-    const merchantBalance = DB.getBalance(qrisInfo.merchantId)
-    const newMerchantBalance = merchantBalance + amount
-    DB.saveBalance(qrisInfo.merchantId, newMerchantBalance)
-
     // Kurangi saldo pembayar
     const newPayerBalance = balance - amount
     setBalance(newPayerBalance)
     DB.saveBalance(user.id, newPayerBalance)
 
-    // Catat transaksi merchant
-    const merchantTransactions = DB.getTransactions(qrisInfo.merchantId)
-    merchantTransactions.push({
-      id: 'tx_' + Date.now(),
-      type: 'receive',
-      amount: amount,
-      reference: qrisInfo.transactionId || 'QRIS',
-      from: user.name,
-      date: new Date().toISOString(),
-      status: 'completed',
-      note: `Pembayaran QRIS dari ${user.name} (${qrisInfo.transactionId})`
-    })
-    DB.saveTransactions(qrisInfo.merchantId, merchantTransactions)
-
-    // Catat transaksi pembayar
+    // Catat transaksi
     const payerTransactions = [{
       id: 'tx_' + Date.now(),
       type: 'transfer',
       amount: -amount,
-      reference: qrisInfo.transactionId || 'QRIS',
-      to: qrisInfo.merchantName || 'Merchant',
+      reference: txnId,
+      to: merchantName,
       date: new Date().toISOString(),
       status: 'completed',
-      note: `Pembayaran QRIS ke ${qrisInfo.merchantName || 'Merchant'}`
+      note: `Pembayaran QRIS ke ${merchantName} (${txnId})`
     }, ...transactions]
     setTransactions(payerTransactions)
     DB.saveTransactions(user.id, payerTransactions)
 
-    alert(`✅ Pembayaran berhasil!\n\n💳 Jumlah: -Rp${amount.toLocaleString()}\n🏪 Merchant: ${qrisInfo.merchantName || 'Merchant'}\n📋 Referensi: ${qrisInfo.transactionId || 'QRIS'}`)
+    alert(`✅ Pembayaran berhasil!\n\n💳 Jumlah: -Rp${amount.toLocaleString()}\n🏪 Merchant: ${merchantName}\n📋 Referensi: ${txnId}`)
     
     setScanResult('')
     setIsProcessing(false)
@@ -929,21 +888,19 @@ function Dashboard({ user, onLogout }) {
 
           {activeTab === 'qris' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">📱 Generate QRIS</h2>
-              <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg mb-4">
-                <p className="text-sm text-blue-800">
-                  ✅ QRIS yang di-generate bisa di-scan oleh SEMUA aplikasi:
+              <h2 className="text-xl font-bold mb-4">📱 Generate QRIS (Standar Nasional)</h2>
+              <div className="bg-green-50 border border-green-200 p-4 rounded-lg mb-4">
+                <p className="text-sm text-green-800">
+                  ✅ QRIS yang di-generate **sudah sesuai standar EMVCo** sehingga bisa di-scan oleh:
                 </p>
                 <div className="flex flex-wrap gap-2 mt-2">
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 DANA</span>
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 OVO</span>
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 BCA Mobile</span>
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 Mandiri Online</span>
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 BRI Mobile</span>
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 BNI Mobile</span>
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 Danamon</span>
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 CIMB Niaga</span>
-                  <span className="bg-white px-3 py-1 rounded-full text-sm">🏦 ShopeePay</span>
+                  <span className="bg-white px-3 py-1 rounded-full text-sm border border-green-200">DANA</span>
+                  <span className="bg-white px-3 py-1 rounded-full text-sm border border-green-200">OVO</span>
+                  <span className="bg-white px-3 py-1 rounded-full text-sm border border-green-200">GoPay</span>
+                  <span className="bg-white px-3 py-1 rounded-full text-sm border border-green-200">ShopeePay</span>
+                  <span className="bg-white px-3 py-1 rounded-full text-sm border border-green-200">BCA Mobile</span>
+                  <span className="bg-white px-3 py-1 rounded-full text-sm border border-green-200">Mandiri Online</span>
+                  <span className="bg-white px-3 py-1 rounded-full text-sm border border-green-200">BRI Mobile</span>
                 </div>
               </div>
 
@@ -1025,7 +982,7 @@ function Dashboard({ user, onLogout }) {
             <div>
               <h2 className="text-xl font-bold mb-4">📷 Scan QRIS</h2>
               <p className="text-sm text-gray-600 mb-4">
-                Scan QRIS dari aplikasi bank atau e-wallet lain untuk melakukan pembayaran otomatis
+                Scan QRIS standar dari aplikasi bank atau e-wallet untuk melakukan pembayaran otomatis
               </p>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1060,8 +1017,7 @@ function Dashboard({ user, onLogout }) {
                         onClick={() => {
                           try {
                             const data = JSON.parse(scanResult)
-                            const qrisInfo = data.qris || data
-                            alert(`📱 Detail QRIS:\n\n🏪 Merchant: ${qrisInfo.merchantName || 'Payment Gateway'}\n💳 Jumlah: Rp${(qrisInfo.amount || 0).toLocaleString()}\n📋 Referensi: ${qrisInfo.transactionId || 'QRIS'}\n🏦 Bisa di-scan: DANA, OVO, BCA, Mandiri, dll`)
+                            alert(`📱 Detail QRIS:\n\n🏪 Merchant: ${data["59"] || 'Payment Gateway'}\n💳 Jumlah: Rp${(parseFloat(data["54"]) || 0).toLocaleString()}\n📋 Referensi: ${data["62"]?.["02"] || 'QRIS'}\n🏦 Bisa di-scan: DANA, OVO, BCA, Mandiri, dll`)
                           } catch {}
                         }}
                         className="mt-2 bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 transition"
@@ -1073,15 +1029,8 @@ function Dashboard({ user, onLogout }) {
                     <div className="text-center py-8">
                       <p className="text-gray-500">Belum ada QRIS yang di-scan</p>
                       <p className="text-sm text-gray-400 mt-2">
-                        Scan QRIS dari aplikasi bank atau e-wallet untuk pembayaran
+                        Scan QRIS standar dari aplikasi bank atau e-wallet
                       </p>
-                      <div className="mt-4 flex flex-wrap gap-2 justify-center">
-                        <span className="bg-gray-200 px-3 py-1 rounded-full text-xs">DANA</span>
-                        <span className="bg-gray-200 px-3 py-1 rounded-full text-xs">OVO</span>
-                        <span className="bg-gray-200 px-3 py-1 rounded-full text-xs">BCA Mobile</span>
-                        <span className="bg-gray-200 px-3 py-1 rounded-full text-xs">Mandiri</span>
-                        <span className="bg-gray-200 px-3 py-1 rounded-full text-xs">BRI</span>
-                      </div>
                     </div>
                   )}
                 </div>
