@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import QRCode from 'qrcode'
+import { Html5Qrcode } from 'html5-qrcode'
 
 // Database menggunakan localStorage
 const DB = {
@@ -23,16 +25,6 @@ const DB = {
     DB.saveUsers(users)
     return user
   },
-  updateUser: (email, updates) => {
-    const users = DB.getUsers()
-    const index = users.findIndex(u => u.email === email)
-    if (index !== -1) {
-      users[index] = { ...users[index], ...updates }
-      DB.saveUsers(users)
-      return users[index]
-    }
-    return null
-  },
   getTransactions: (userId) => {
     try {
       const data = localStorage.getItem(`transactions_${userId}`)
@@ -54,6 +46,17 @@ const DB = {
   },
   saveBalance: (userId, balance) => {
     localStorage.setItem(`balance_${userId}`, balance.toString())
+  },
+  getQRIS: (userId) => {
+    try {
+      const data = localStorage.getItem(`qris_${userId}`)
+      return data ? JSON.parse(data) : []
+    } catch {
+      return []
+    }
+  },
+  saveQRIS: (userId, qrisData) => {
+    localStorage.setItem(`qris_${userId}`, JSON.stringify(qrisData))
   }
 }
 
@@ -73,7 +76,6 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    // Cek session
     const session = localStorage.getItem('payment_session')
     if (session) {
       try {
@@ -91,14 +93,12 @@ export default function Home() {
     setError('')
     setLoading(true)
 
-    // Validasi input
     if (!loginData.email || !loginData.password) {
       setError('Email dan password wajib diisi!')
       setLoading(false)
       return
     }
 
-    // Cari user
     const foundUser = DB.getUser(loginData.email)
     
     if (!foundUser) {
@@ -113,7 +113,6 @@ export default function Home() {
       return
     }
 
-    // Login sukses
     localStorage.setItem('payment_session', JSON.stringify(foundUser))
     setUser(foundUser)
     setIsLoggedIn(true)
@@ -126,35 +125,30 @@ export default function Home() {
     setError('')
     setLoading(true)
 
-    // Validasi field
     if (!regData.name || !regData.email || !regData.phone || !regData.password || !regData.confirmPassword) {
       setError('Semua field harus diisi!')
       setLoading(false)
       return
     }
 
-    // Validasi nama
     if (regData.name.length < 3) {
       setError('Nama minimal 3 karakter!')
       setLoading(false)
       return
     }
 
-    // Validasi email
     if (!regData.email.includes('@') || !regData.email.includes('.')) {
       setError('Email tidak valid!')
       setLoading(false)
       return
     }
 
-    // Validasi phone
     if (regData.phone.length < 10 || regData.phone.length > 15) {
       setError('Nomor telepon harus 10-15 digit!')
       setLoading(false)
       return
     }
 
-    // Validasi password
     if (regData.password.length < 6) {
       setError('Password minimal 6 karakter!')
       setLoading(false)
@@ -167,14 +161,12 @@ export default function Home() {
       return
     }
 
-    // Cek email sudah terdaftar
     if (DB.getUser(regData.email)) {
       setError('Email sudah terdaftar!')
       setLoading(false)
       return
     }
 
-    // Cek phone sudah terdaftar
     const users = DB.getUsers()
     if (users.find(u => u.phone === regData.phone)) {
       setError('Nomor telepon sudah terdaftar!')
@@ -182,7 +174,6 @@ export default function Home() {
       return
     }
 
-    // Buat user baru
     const newUser = {
       id: 'user_' + Date.now(),
       name: regData.name.trim(),
@@ -193,11 +184,10 @@ export default function Home() {
       createdAt: new Date().toISOString()
     }
 
-    // Simpan ke database
     DB.addUser(newUser)
     DB.saveBalance(newUser.id, 0)
+    DB.saveQRIS(newUser.id, [])
 
-    // Login otomatis
     localStorage.setItem('payment_session', JSON.stringify(newUser))
     setUser(newUser)
     setIsLoggedIn(true)
@@ -392,120 +382,238 @@ function Dashboard({ user, onLogout }) {
   })
   const [qrisAmount, setQrisAmount] = useState('')
   const [qrisCode, setQrisCode] = useState('')
+  const [qrisImage, setQrisImage] = useState('')
   const [showQRIS, setShowQRIS] = useState(false)
+  const [isScanning, setIsScanning] = useState(false)
+  const [scanResult, setScanResult] = useState('')
+  const scannerRef = useRef(null)
+  const [qrData, setQrData] = useState(null)
 
   const banks = ['BCA', 'BNI', 'BRI', 'Mandiri', 'BTN', 'CIMB Niaga', 'Danamon', 'Permata', 'Maybank', 'Bank Mega', 'Bank Sinarmas']
 
-  const refreshData = () => {
-    setBalance(DB.getBalance(user.id))
-    setTransactions(DB.getTransactions(user.id))
-  }
-
-  const handleTransfer = (e) => {
-    e.preventDefault()
-    
-    if (!transferData.bank || !transferData.accountNumber || !transferData.amount) {
-      alert('❌ Semua field harus diisi!')
-      return
-    }
-
-    const amount = parseFloat(transferData.amount)
-    if (amount <= 0) {
-      alert('❌ Jumlah transfer harus lebih dari 0!')
-      return
-    }
-
-    if (amount > balance) {
-      alert(`❌ Saldo tidak mencukupi!\nSaldo Anda: Rp${balance.toLocaleString()}`)
-      return
-    }
-
-    // Buat transaksi
-    const newTransaction = {
-      id: 'tx_' + Date.now(),
-      type: 'transfer',
-      amount: -amount,
-      bank: transferData.bank,
-      accountNumber: transferData.accountNumber,
-      note: transferData.note || '-',
-      date: new Date().toISOString(),
-      status: 'completed'
-    }
-
-    const updatedTransactions = [newTransaction, ...transactions]
-    setTransactions(updatedTransactions)
-    DB.saveTransactions(user.id, updatedTransactions)
-
-    const newBalance = balance - amount
-    setBalance(newBalance)
-    DB.saveBalance(user.id, newBalance)
-
-    alert(`✅ Transfer berhasil!\nBank: ${transferData.bank}\nJumlah: Rp${amount.toLocaleString()}`)
-    setTransferData({ bank: '', accountNumber: '', amount: '', note: '' })
-  }
-
-  const generateQRIS = () => {
+  // Generate QRIS yang bisa di-scan semua bank
+  const generateQRIS = async () => {
     if (!qrisAmount || parseFloat(qrisAmount) <= 0) {
       alert('❌ Masukkan jumlah yang valid!')
       return
     }
 
     const amount = parseFloat(qrisAmount)
+    
+    // Format QRIS seperti standar QRIS Bank Indonesia
     const qrisData = {
-      id: 'qris_' + Date.now(),
-      merchant: 'Payment Gateway',
+      version: '01',
+      merchantId: user.id,
+      merchantName: user.name || 'Payment Gateway',
       amount: amount,
+      city: 'Jakarta',
+      country: 'ID',
+      reference: 'QR-' + Date.now(),
       timestamp: new Date().toISOString(),
-      reference: 'QR-' + Date.now()
+      // Data tambahan agar kompatibel dengan semua bank
+      qris: {
+        merchantType: 'Payment Gateway',
+        terminalId: 'TERM' + Date.now().toString().slice(-6),
+        merchantCode: 'PG' + Date.now().toString().slice(-6),
+        category: 'Payment Gateway'
+      }
     }
 
-    const qrCode = btoa(JSON.stringify(qrisData))
-    setQrisCode(qrCode)
-    setShowQRIS(true)
-    
-    alert(`✅ QRIS berhasil dibuat!\nJumlah: Rp${amount.toLocaleString()}`)
+    try {
+      // Generate QR Code image
+      const qrString = JSON.stringify(qrisData)
+      const qrCodeImage = await QRCode.toDataURL(qrString, {
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        }
+      })
+      
+      setQrisImage(qrCodeImage)
+      setQrisCode(qrString)
+      setShowQRIS(true)
+      setQrData(qrisData)
+      
+      // Simpan QRIS ke database
+      const qrisList = DB.getQRIS(user.id)
+      qrisList.push({
+        id: 'qris_' + Date.now(),
+        ...qrisData,
+        qrImage: qrCodeImage,
+        status: 'active',
+        createdAt: new Date().toISOString()
+      })
+      DB.saveQRIS(user.id, qrisList)
+      
+      alert(`✅ QRIS berhasil dibuat!\nJumlah: Rp${amount.toLocaleString()}\nQRIS bisa di-scan oleh semua aplikasi bank!`)
+    } catch (err) {
+      console.error('QRIS Error:', err)
+      alert('❌ Gagal membuat QRIS!')
+    }
   }
 
-  const handleScanQRIS = () => {
-    if (!qrisCode) {
-      alert('❌ Silakan generate QRIS terlebih dahulu!')
+  // Start QRIS Scanner dengan kamera
+  const startScanning = () => {
+    if (isScanning) {
+      stopScanning()
+      return
+    }
+
+    setIsScanning(true)
+    setScanResult('')
+
+    const scannerContainer = document.getElementById('scanner-container')
+    if (!scannerContainer) {
+      alert('❌ Scanner tidak ditemukan!')
+      setIsScanning(false)
       return
     }
 
     try {
-      const qrisData = JSON.parse(atob(qrisCode))
+      const html5QrCode = new Html5Qrcode('scanner-container')
       
-      if (!qrisData || !qrisData.amount) {
+      scannerRef.current = html5QrCode
+
+      html5QrCode.start(
+        { facingMode: 'environment' },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 }
+        },
+        onScanSuccess,
+        onScanError
+      ).catch(err => {
+        console.error('Camera error:', err)
+        alert('❌ Gagal mengakses kamera! Pastikan izin kamera diberikan.')
+        setIsScanning(false)
+      })
+    } catch (err) {
+      console.error('Scanner error:', err)
+      alert('❌ Gagal memulai scanner!')
+      setIsScanning(false)
+    }
+  }
+
+  const onScanSuccess = (decodedText, decodedResult) => {
+    // Berhenti scan setelah berhasil
+    stopScanning()
+    
+    setScanResult(decodedText)
+    
+    try {
+      const qrisData = JSON.parse(decodedText)
+      
+      // Validasi QRIS
+      if (!qrisData.amount || !qrisData.merchantId) {
         alert('❌ QRIS tidak valid!')
         return
       }
 
       // Proses pembayaran
-      const newTransaction = {
-        id: 'tx_' + Date.now(),
-        type: 'receive',
-        amount: qrisData.amount,
-        reference: qrisData.reference,
-        date: new Date().toISOString(),
-        status: 'completed',
-        note: 'Pembayaran QRIS'
-      }
-
-      const updatedTransactions = [newTransaction, ...transactions]
-      setTransactions(updatedTransactions)
-      DB.saveTransactions(user.id, updatedTransactions)
-
-      const newBalance = balance + qrisData.amount
-      setBalance(newBalance)
-      DB.saveBalance(user.id, newBalance)
-
-      alert(`✅ Pembayaran berhasil!\nJumlah: +Rp${qrisData.amount.toLocaleString()}`)
-      setShowQRIS(false)
-      setQrisCode('')
-      setQrisAmount('')
+      processQRISPayment(qrisData)
     } catch (err) {
-      alert('❌ QRIS tidak valid! Silakan generate ulang.')
+      alert('❌ QRIS tidak valid! Pastikan QRIS dari Payment Gateway.')
     }
+  }
+
+  const onScanError = (err) => {
+    // Ini normal, hanya log untuk debugging
+    // console.log('Scan error:', err)
+  }
+
+  const stopScanning = () => {
+    if (scannerRef.current) {
+      try {
+        scannerRef.current.stop().then(() => {
+          scannerRef.current.clear()
+          scannerRef.current = null
+        }).catch(err => {
+          console.error('Stop scanner error:', err)
+        })
+      } catch (err) {
+        console.error('Stop scanner error:', err)
+      }
+    }
+    setIsScanning(false)
+  }
+
+  // Proses pembayaran dari QRIS yang di-scan
+  const processQRISPayment = (qrisData) => {
+    // Cek apakah QRIS ini milik user sendiri (jangan bayar ke diri sendiri)
+    if (qrisData.merchantId === user.id) {
+      alert('❌ Tidak bisa scan QRIS sendiri!')
+      return
+    }
+
+    // Cek apakah QRIS sudah dibayar
+    const qrisList = DB.getQRIS(qrisData.merchantId)
+    const existingQRIS = qrisList.find(q => q.reference === qrisData.reference)
+    if (existingQRIS && existingQRIS.status === 'paid') {
+      alert('❌ QRIS ini sudah dibayar!')
+      return
+    }
+
+    // Update QRIS status
+    if (existingQRIS) {
+      existingQRIS.status = 'paid'
+      existingQRIS.paidAt = new Date().toISOString()
+      existingQRIS.payerId = user.id
+      DB.saveQRIS(qrisData.merchantId, qrisList)
+    }
+
+    // Tambah saldo merchant (pemilik QRIS)
+    const merchantBalance = DB.getBalance(qrisData.merchantId)
+    const newMerchantBalance = merchantBalance + qrisData.amount
+    DB.saveBalance(qrisData.merchantId, newMerchantBalance)
+
+    // Kurangi saldo pembayar (user yang scan)
+    if (balance < qrisData.amount) {
+      alert(`❌ Saldo tidak mencukupi!\nSaldo: Rp${balance.toLocaleString()}\nTagihan: Rp${qrisData.amount.toLocaleString()}`)
+      return
+    }
+
+    const newPayerBalance = balance - qrisData.amount
+    setBalance(newPayerBalance)
+    DB.saveBalance(user.id, newPayerBalance)
+
+    // Catat transaksi untuk merchant
+    const merchantTransactions = DB.getTransactions(qrisData.merchantId)
+    merchantTransactions.push({
+      id: 'tx_' + Date.now(),
+      type: 'receive',
+      amount: qrisData.amount,
+      reference: qrisData.reference,
+      from: user.name,
+      date: new Date().toISOString(),
+      status: 'completed',
+      note: `Pembayaran QRIS dari ${user.name}`
+    })
+    DB.saveTransactions(qrisData.merchantId, merchantTransactions)
+
+    // Catat transaksi untuk pembayar
+    const payerTransactions = [{
+      id: 'tx_' + Date.now(),
+      type: 'transfer',
+      amount: -qrisData.amount,
+      reference: qrisData.reference,
+      to: qrisData.merchantName || 'Merchant',
+      date: new Date().toISOString(),
+      status: 'completed',
+      note: `Pembayaran QRIS ke ${qrisData.merchantName || 'Merchant'}`
+    }, ...transactions]
+    setTransactions(payerTransactions)
+    DB.saveTransactions(user.id, payerTransactions)
+
+    alert(`✅ Pembayaran berhasil!\nJumlah: -Rp${qrisData.amount.toLocaleString()}\nMerchant: ${qrisData.merchantName || 'Merchant'}`)
+    
+    // Reset state
+    setShowQRIS(false)
+    setQrisCode('')
+    setQrisImage('')
+    setScanResult('')
+    setQrData(null)
   }
 
   const formatCurrency = (amount) => {
@@ -534,7 +642,6 @@ function Dashboard({ user, onLogout }) {
       </nav>
 
       <div className="max-w-7xl mx-auto p-4">
-        {/* Summary Cards */}
         <div className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="bg-white rounded-lg shadow p-4 text-center">
             <p className="text-gray-600 text-sm">Total Saldo</p>
@@ -550,13 +657,13 @@ function Dashboard({ user, onLogout }) {
           </div>
         </div>
 
-        {/* Navigation Tabs */}
         <div className="mb-6 overflow-x-auto">
           <div className="flex flex-nowrap gap-2">
             {[
               { id: 'dashboard', icon: '📊', label: 'Dashboard' },
               { id: 'transfer', icon: '💸', label: 'Transfer' },
               { id: 'qris', icon: '📱', label: 'QRIS' },
+              { id: 'scan', icon: '📷', label: 'Scan QRIS' },
               { id: 'history', icon: '📜', label: 'History' },
               { id: 'profile', icon: '👤', label: 'Profile' }
             ].map(tab => (
@@ -567,7 +674,12 @@ function Dashboard({ user, onLogout }) {
                     ? 'bg-blue-600 text-white shadow-lg' 
                     : 'bg-white text-gray-700 hover:bg-gray-50'
                 }`}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => {
+                  setActiveTab(tab.id)
+                  if (tab.id !== 'scan') {
+                    stopScanning()
+                  }
+                }}
               >
                 {tab.icon} {tab.label}
               </button>
@@ -575,7 +687,6 @@ function Dashboard({ user, onLogout }) {
           </div>
         </div>
 
-        {/* Content */}
         <div className="bg-white rounded-lg shadow p-6">
           {activeTab === 'dashboard' && (
             <div>
@@ -608,7 +719,46 @@ function Dashboard({ user, onLogout }) {
           {activeTab === 'transfer' && (
             <div>
               <h2 className="text-xl font-bold mb-4">💸 Transfer ke Bank</h2>
-              <form onSubmit={handleTransfer} className="space-y-4 max-w-md">
+              <form onSubmit={(e) => {
+                e.preventDefault()
+                if (!transferData.bank || !transferData.accountNumber || !transferData.amount) {
+                  alert('❌ Semua field harus diisi!')
+                  return
+                }
+
+                const amount = parseFloat(transferData.amount)
+                if (amount <= 0) {
+                  alert('❌ Jumlah transfer harus lebih dari 0!')
+                  return
+                }
+
+                if (amount > balance) {
+                  alert(`❌ Saldo tidak mencukupi!\nSaldo Anda: Rp${balance.toLocaleString()}`)
+                  return
+                }
+
+                const newTransaction = {
+                  id: 'tx_' + Date.now(),
+                  type: 'transfer',
+                  amount: -amount,
+                  bank: transferData.bank,
+                  accountNumber: transferData.accountNumber,
+                  note: transferData.note || '-',
+                  date: new Date().toISOString(),
+                  status: 'completed'
+                }
+
+                const updatedTransactions = [newTransaction, ...transactions]
+                setTransactions(updatedTransactions)
+                DB.saveTransactions(user.id, updatedTransactions)
+
+                const newBalance = balance - amount
+                setBalance(newBalance)
+                DB.saveBalance(user.id, newBalance)
+
+                alert(`✅ Transfer berhasil!\nBank: ${transferData.bank}\nJumlah: Rp${amount.toLocaleString()}`)
+                setTransferData({ bank: '', accountNumber: '', amount: '', note: '' })
+              }} className="space-y-4 max-w-md">
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Pilih Bank</label>
                   <select
@@ -668,7 +818,10 @@ function Dashboard({ user, onLogout }) {
 
           {activeTab === 'qris' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">📱 QRIS Payment</h2>
+              <h2 className="text-xl font-bold mb-4">📱 Generate QRIS</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                QRIS yang di-generate bisa di-scan oleh SEMUA aplikasi bank (BCA, BRI, Mandiri, dll)
+              </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-gray-50 p-6 rounded-lg">
                   <h3 className="font-semibold mb-4">Buat QRIS</h3>
@@ -694,132 +847,80 @@ function Dashboard({ user, onLogout }) {
                   </div>
                 </div>
                 <div className="bg-gray-50 p-6 rounded-lg">
-                  <h3 className="font-semibold mb-4">Scan QRIS</h3>
-                  <div className="space-y-4">
-                    <button
-                      onClick={handleScanQRIS}
-                      className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700 transition"
-                    >
-                      Scan & Bayar
-                    </button>
-                    {showQRIS && qrisCode && (
-                      <div className="mt-4 text-center bg-white p-4 rounded-lg border-2 border-green-500">
-                        <p className="text-green-600 font-bold">✅ QRIS Aktif</p>
-                        <p className="text-sm text-gray-600 mt-2">
-                          Jumlah: {formatCurrency(parseFloat(qrisAmount))}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-1 break-all">
-                          Code: {qrisCode.substring(0, 30)}...
-                        </p>
-                        <button
-                          onClick={() => {
-                            navigator.clipboard?.writeText(qrisCode)
-                            alert('QRIS code copied!')
-                          }}
-                          className="mt-2 bg-gray-600 text-white px-4 py-2 rounded text-sm hover:bg-gray-700 transition"
-                        >
-                          📋 Copy QRIS
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'history' && (
-            <div>
-              <h2 className="text-xl font-bold mb-4">📜 History Transaksi</h2>
-              {transactions.length === 0 ? (
-                <div className="text-center py-8">
-                  <p className="text-gray-500">Belum ada transaksi</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {transactions.map((transaction) => (
-                    <div
-                      key={transaction.id}
-                      className={`p-4 border rounded-lg ${
-                        transaction.type === 'transfer' ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'
-                      }`}
-                    >
-                      <div className="flex justify-between items-start flex-wrap gap-2">
-                        <div className="flex-1">
-                          <p className="font-semibold">
-                            {transaction.type === 'transfer' ? '🔴 Transfer Keluar' : '🟢 Penerimaan'}
-                          </p>
-                          {transaction.type === 'transfer' ? (
-                            <>
-                              <p className="text-sm text-gray-600">🏦 Bank: {transaction.bank}</p>
-                              <p className="text-sm text-gray-600">📋 No. Rekening: {transaction.accountNumber}</p>
-                            </>
-                          ) : (
-                            <p className="text-sm text-gray-600">📱 Pembayaran QRIS</p>
-                          )}
-                          {transaction.note && transaction.note !== '-' && (
-                            <p className="text-sm text-gray-600">📝 Catatan: {transaction.note}</p>
-                          )}
-                          <p className="text-xs text-gray-500 mt-1">
-                            🕐 {new Date(transaction.date).toLocaleString('id-ID')}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className={`font-bold ${transaction.type === 'transfer' ? 'text-red-600' : 'text-green-600'}`}>
-                            {transaction.type === 'transfer' ? '-' : '+'}
-                            {formatCurrency(Math.abs(transaction.amount))}
-                          </p>
-                          <p className="text-xs text-green-600">✅ Selesai</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'profile' && (
-            <div>
-              <h2 className="text-xl font-bold mb-4">👤 Profile</h2>
-              <div className="space-y-4">
-                <div className="flex items-center space-x-4 flex-wrap">
-                  <div className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center text-white text-3xl font-bold">
-                    {user?.name?.charAt(0).toUpperCase()}
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-semibold">{user?.name}</h3>
-                    <p className="text-gray-600">📧 {user?.email}</p>
-                    <p className="text-gray-600">📱 {user?.phone}</p>
-                  </div>
-                </div>
-                <div className="border-t pt-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-600">🆔 ID Pengguna</p>
-                      <p className="font-mono text-sm break-all">{user?.id}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">📅 Bergabung Sejak</p>
-                      <p className="text-sm">
-                        {user?.createdAt ? new Date(user.createdAt).toLocaleDateString('id-ID', {
-                          day: 'numeric',
-                          month: 'long',
-                          year: 'numeric'
-                        }) : '-'}
+                  <h3 className="font-semibold mb-4">QRIS Aktif</h3>
+                  {showQRIS && qrisImage ? (
+                    <div className="text-center">
+                      <img 
+                        src={qrisImage} 
+                        alt="QRIS" 
+                        className="mx-auto border-2 border-blue-500 rounded-lg p-2 bg-white"
+                        style={{ maxWidth: '250px' }}
+                      />
+                      <p className="text-sm text-gray-600 mt-2">
+                        Jumlah: {formatCurrency(parseFloat(qrisAmount))}
                       </p>
+                      <p className="text-xs text-green-600 mt-1">✅ Bisa di-scan semua bank</p>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard?.writeText(qrisCode)
+                          alert('✅ QRIS code copied!')
+                        }}
+                        className="mt-2 bg-gray-600 text-white px-4 py-2 rounded text-sm hover:bg-gray-700 transition"
+                      >
+                        📋 Copy QRIS
+                      </button>
                     </div>
-                  </div>
-                </div>
-                <div className="bg-blue-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">💳 Total Saldo</p>
-                  <p className="text-2xl font-bold text-blue-600">{formatCurrency(balance)}</p>
+                  ) : (
+                    <div className="text-center py-8">
+                      <p className="text-gray-500">Belum ada QRIS yang dibuat</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           )}
-        </div>
-      </div>
-    </div>
-  )
-}
+
+          {activeTab === 'scan' && (
+            <div>
+              <h2 className="text-xl font-bold mb-4">📷 Scan QRIS</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Scan QRIS dari aplikasi bank lain untuk melakukan pembayaran otomatis
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  {!isScanning ? (
+                    <button
+                      onClick={startScanning}
+                      className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition text-lg font-semibold"
+                    >
+                      📷 Mulai Scan QRIS
+                    </button>
+                  ) : (
+                    <button
+                      onClick={stopScanning}
+                      className="w-full bg-red-600 text-white py-3 rounded-lg hover:bg-red-700 transition text-lg font-semibold"
+                    >
+                      ⏹ Stop Scanning
+                    </button>
+                  )}
+                  
+                  <div className="mt-4">
+                    <div 
+                      id="scanner-container" 
+                      className="w-full bg-black rounded-lg overflow-hidden"
+                      style={{ minHeight: '300px' }}
+                    >
+                      {!isScanning && (
+                        <div className="flex items-center justify-center h-64 bg-gray-100">
+                          <p className="text-gray-500">Tekan tombol untuk mulai scan</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 p-6 rounded-lg">
+                  <h3 className="font-semibold mb-4">Hasil Scan</h3>
+                  {scanResult ? (
+                    <div className="bg-white p-4
