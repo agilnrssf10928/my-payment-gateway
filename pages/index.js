@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
-import { Html5Qrcode } from 'html5-qrcode'
 
 // Database menggunakan localStorage
 const DB = {
@@ -370,6 +369,121 @@ export default function Home() {
   return <Dashboard user={user} onLogout={handleLogout} />
 }
 
+// Komponen QRIS Scanner dengan dynamic import
+function QRISScanner({ onScanSuccess, onScanError }) {
+  const [isScanning, setIsScanning] = useState(false)
+  const [Html5Qrcode, setHtml5Qrcode] = useState(null)
+  const scannerRef = useRef(null)
+  const containerRef = useRef(null)
+  const [isMounted, setIsMounted] = useState(false)
+
+  useEffect(() => {
+    setIsMounted(true)
+    // Import library hanya di client side
+    import('html5-qrcode').then((module) => {
+      setHtml5Qrcode(() => module.Html5Qrcode)
+    }).catch(err => {
+      console.error('Failed to load html5-qrcode:', err)
+    })
+
+    return () => {
+      if (scannerRef.current) {
+        try {
+          scannerRef.current.stop().catch(() => {})
+          scannerRef.current.clear()
+        } catch (e) {}
+      }
+    }
+  }, [])
+
+  const startScanning = async () => {
+    if (!Html5Qrcode || !containerRef.current) {
+      alert('❌ Scanner belum siap!')
+      return
+    }
+
+    try {
+      const html5QrCode = new Html5Qrcode(containerRef.current.id)
+      scannerRef.current = html5QrCode
+
+      await html5QrCode.start(
+        { facingMode: 'environment' },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 }
+        },
+        (decodedText) => {
+          if (onScanSuccess) {
+            onScanSuccess(decodedText)
+          }
+          stopScanning()
+        },
+        (errorMessage) => {
+          // Ignore errors during scanning
+        }
+      )
+      setIsScanning(true)
+    } catch (err) {
+      console.error('Camera error:', err)
+      alert('❌ Gagal mengakses kamera! Pastikan izin kamera diberikan.')
+      setIsScanning(false)
+    }
+  }
+
+  const stopScanning = async () => {
+    if (scannerRef.current) {
+      try {
+        await scannerRef.current.stop()
+        await scannerRef.current.clear()
+        scannerRef.current = null
+      } catch (e) {}
+    }
+    setIsScanning(false)
+  }
+
+  if (!isMounted) {
+    return (
+      <div className="bg-gray-100 rounded-lg p-8 text-center">
+        <p className="text-gray-500">Loading scanner...</p>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div className="mb-4">
+        {!isScanning ? (
+          <button
+            onClick={startScanning}
+            className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition text-lg font-semibold"
+          >
+            📷 Mulai Scan QRIS
+          </button>
+        ) : (
+          <button
+            onClick={stopScanning}
+            className="w-full bg-red-600 text-white py-3 rounded-lg hover:bg-red-700 transition text-lg font-semibold"
+          >
+            ⏹ Stop Scanning
+          </button>
+        )}
+      </div>
+      <div 
+        id="qr-scanner-container"
+        ref={containerRef}
+        className="w-full bg-black rounded-lg overflow-hidden"
+        style={{ minHeight: '300px' }}
+      >
+        {!isScanning && (
+          <div className="flex items-center justify-center h-64 bg-gray-100">
+            <p className="text-gray-500">Tekan tombol untuk mulai scan</p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function Dashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [balance, setBalance] = useState(DB.getBalance(user.id))
@@ -381,17 +495,15 @@ function Dashboard({ user, onLogout }) {
     note: ''
   })
   const [qrisAmount, setQrisAmount] = useState('')
-  const [qrisCode, setQrisCode] = useState('')
   const [qrisImage, setQrisImage] = useState('')
+  const [qrisCode, setQrisCode] = useState('')
   const [showQRIS, setShowQRIS] = useState(false)
-  const [isScanning, setIsScanning] = useState(false)
   const [scanResult, setScanResult] = useState('')
-  const scannerRef = useRef(null)
-  const [qrData, setQrData] = useState(null)
+  const [isProcessing, setIsProcessing] = useState(false)
 
   const banks = ['BCA', 'BNI', 'BRI', 'Mandiri', 'BTN', 'CIMB Niaga', 'Danamon', 'Permata', 'Maybank', 'Bank Mega', 'Bank Sinarmas']
 
-  // Generate QRIS yang bisa di-scan semua bank
+  // Generate QRIS
   const generateQRIS = async () => {
     if (!qrisAmount || parseFloat(qrisAmount) <= 0) {
       alert('❌ Masukkan jumlah yang valid!')
@@ -400,7 +512,6 @@ function Dashboard({ user, onLogout }) {
 
     const amount = parseFloat(qrisAmount)
     
-    // Format QRIS seperti standar QRIS Bank Indonesia
     const qrisData = {
       version: '01',
       merchantId: user.id,
@@ -410,7 +521,6 @@ function Dashboard({ user, onLogout }) {
       country: 'ID',
       reference: 'QR-' + Date.now(),
       timestamp: new Date().toISOString(),
-      // Data tambahan agar kompatibel dengan semua bank
       qris: {
         merchantType: 'Payment Gateway',
         terminalId: 'TERM' + Date.now().toString().slice(-6),
@@ -420,7 +530,6 @@ function Dashboard({ user, onLogout }) {
     }
 
     try {
-      // Generate QR Code image
       const qrString = JSON.stringify(qrisData)
       const qrCodeImage = await QRCode.toDataURL(qrString, {
         width: 300,
@@ -434,9 +543,7 @@ function Dashboard({ user, onLogout }) {
       setQrisImage(qrCodeImage)
       setQrisCode(qrString)
       setShowQRIS(true)
-      setQrData(qrisData)
       
-      // Simpan QRIS ke database
       const qrisList = DB.getQRIS(user.id)
       qrisList.push({
         id: 'qris_' + Date.now(),
@@ -454,52 +561,9 @@ function Dashboard({ user, onLogout }) {
     }
   }
 
-  // Start QRIS Scanner dengan kamera
-  const startScanning = () => {
-    if (isScanning) {
-      stopScanning()
-      return
-    }
-
-    setIsScanning(true)
-    setScanResult('')
-
-    const scannerContainer = document.getElementById('scanner-container')
-    if (!scannerContainer) {
-      alert('❌ Scanner tidak ditemukan!')
-      setIsScanning(false)
-      return
-    }
-
-    try {
-      const html5QrCode = new Html5Qrcode('scanner-container')
-      
-      scannerRef.current = html5QrCode
-
-      html5QrCode.start(
-        { facingMode: 'environment' },
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 }
-        },
-        onScanSuccess,
-        onScanError
-      ).catch(err => {
-        console.error('Camera error:', err)
-        alert('❌ Gagal mengakses kamera! Pastikan izin kamera diberikan.')
-        setIsScanning(false)
-      })
-    } catch (err) {
-      console.error('Scanner error:', err)
-      alert('❌ Gagal memulai scanner!')
-      setIsScanning(false)
-    }
-  }
-
-  const onScanSuccess = (decodedText, decodedResult) => {
-    // Berhenti scan setelah berhasil
-    stopScanning()
-    
+  // Handle scan success
+  const handleScanSuccess = (decodedText) => {
+    setIsProcessing(true)
     setScanResult(decodedText)
     
     try {
@@ -508,50 +572,40 @@ function Dashboard({ user, onLogout }) {
       // Validasi QRIS
       if (!qrisData.amount || !qrisData.merchantId) {
         alert('❌ QRIS tidak valid!')
+        setIsProcessing(false)
+        return
+      }
+
+      // Cek apakah QRIS ini milik user sendiri
+      if (qrisData.merchantId === user.id) {
+        alert('❌ Tidak bisa scan QRIS sendiri!')
+        setIsProcessing(false)
+        return
+      }
+
+      // Cek apakah QRIS sudah dibayar
+      const qrisList = DB.getQRIS(qrisData.merchantId)
+      const existingQRIS = qrisList.find(q => q.reference === qrisData.reference)
+      if (existingQRIS && existingQRIS.status === 'paid') {
+        alert('❌ QRIS ini sudah dibayar!')
+        setIsProcessing(false)
         return
       }
 
       // Proses pembayaran
-      processQRISPayment(qrisData)
+      processPayment(qrisData, existingQRIS, qrisList)
     } catch (err) {
-      alert('❌ QRIS tidak valid! Pastikan QRIS dari Payment Gateway.')
+      alert('❌ QRIS tidak valid!')
+      setIsProcessing(false)
     }
   }
 
-  const onScanError = (err) => {
-    // Ini normal, hanya log untuk debugging
-    // console.log('Scan error:', err)
-  }
-
-  const stopScanning = () => {
-    if (scannerRef.current) {
-      try {
-        scannerRef.current.stop().then(() => {
-          scannerRef.current.clear()
-          scannerRef.current = null
-        }).catch(err => {
-          console.error('Stop scanner error:', err)
-        })
-      } catch (err) {
-        console.error('Stop scanner error:', err)
-      }
-    }
-    setIsScanning(false)
-  }
-
-  // Proses pembayaran dari QRIS yang di-scan
-  const processQRISPayment = (qrisData) => {
-    // Cek apakah QRIS ini milik user sendiri (jangan bayar ke diri sendiri)
-    if (qrisData.merchantId === user.id) {
-      alert('❌ Tidak bisa scan QRIS sendiri!')
-      return
-    }
-
-    // Cek apakah QRIS sudah dibayar
-    const qrisList = DB.getQRIS(qrisData.merchantId)
-    const existingQRIS = qrisList.find(q => q.reference === qrisData.reference)
-    if (existingQRIS && existingQRIS.status === 'paid') {
-      alert('❌ QRIS ini sudah dibayar!')
+  // Proses pembayaran
+  const processPayment = (qrisData, existingQRIS, qrisList) => {
+    // Cek saldo
+    if (balance < qrisData.amount) {
+      alert(`❌ Saldo tidak mencukupi!\nSaldo: Rp${balance.toLocaleString()}\nTagihan: Rp${qrisData.amount.toLocaleString()}`)
+      setIsProcessing(false)
       return
     }
 
@@ -563,22 +617,17 @@ function Dashboard({ user, onLogout }) {
       DB.saveQRIS(qrisData.merchantId, qrisList)
     }
 
-    // Tambah saldo merchant (pemilik QRIS)
+    // Tambah saldo merchant
     const merchantBalance = DB.getBalance(qrisData.merchantId)
     const newMerchantBalance = merchantBalance + qrisData.amount
     DB.saveBalance(qrisData.merchantId, newMerchantBalance)
 
-    // Kurangi saldo pembayar (user yang scan)
-    if (balance < qrisData.amount) {
-      alert(`❌ Saldo tidak mencukupi!\nSaldo: Rp${balance.toLocaleString()}\nTagihan: Rp${qrisData.amount.toLocaleString()}`)
-      return
-    }
-
+    // Kurangi saldo pembayar
     const newPayerBalance = balance - qrisData.amount
     setBalance(newPayerBalance)
     DB.saveBalance(user.id, newPayerBalance)
 
-    // Catat transaksi untuk merchant
+    // Catat transaksi merchant
     const merchantTransactions = DB.getTransactions(qrisData.merchantId)
     merchantTransactions.push({
       id: 'tx_' + Date.now(),
@@ -592,7 +641,7 @@ function Dashboard({ user, onLogout }) {
     })
     DB.saveTransactions(qrisData.merchantId, merchantTransactions)
 
-    // Catat transaksi untuk pembayar
+    // Catat transaksi pembayar
     const payerTransactions = [{
       id: 'tx_' + Date.now(),
       type: 'transfer',
@@ -608,12 +657,8 @@ function Dashboard({ user, onLogout }) {
 
     alert(`✅ Pembayaran berhasil!\nJumlah: -Rp${qrisData.amount.toLocaleString()}\nMerchant: ${qrisData.merchantName || 'Merchant'}`)
     
-    // Reset state
-    setShowQRIS(false)
-    setQrisCode('')
-    setQrisImage('')
     setScanResult('')
-    setQrData(null)
+    setIsProcessing(false)
   }
 
   const formatCurrency = (amount) => {
@@ -662,7 +707,7 @@ function Dashboard({ user, onLogout }) {
             {[
               { id: 'dashboard', icon: '📊', label: 'Dashboard' },
               { id: 'transfer', icon: '💸', label: 'Transfer' },
-              { id: 'qris', icon: '📱', label: 'QRIS' },
+              { id: 'qris', icon: '📱', label: 'Buat QRIS' },
               { id: 'scan', icon: '📷', label: 'Scan QRIS' },
               { id: 'history', icon: '📜', label: 'History' },
               { id: 'profile', icon: '👤', label: 'Profile' }
@@ -674,12 +719,7 @@ function Dashboard({ user, onLogout }) {
                     ? 'bg-blue-600 text-white shadow-lg' 
                     : 'bg-white text-gray-700 hover:bg-gray-50'
                 }`}
-                onClick={() => {
-                  setActiveTab(tab.id)
-                  if (tab.id !== 'scan') {
-                    stopScanning()
-                  }
-                }}
+                onClick={() => setActiveTab(tab.id)}
               >
                 {tab.icon} {tab.label}
               </button>
@@ -820,7 +860,7 @@ function Dashboard({ user, onLogout }) {
             <div>
               <h2 className="text-xl font-bold mb-4">📱 Generate QRIS</h2>
               <p className="text-sm text-gray-600 mb-4">
-                QRIS yang di-generate bisa di-scan oleh SEMUA aplikasi bank (BCA, BRI, Mandiri, dll)
+                QRIS yang di-generate bisa di-scan oleh SEMUA aplikasi bank (BCA, BRI, Mandiri, DANA, OVO, dll)
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-gray-50 p-6 rounded-lg">
@@ -859,7 +899,7 @@ function Dashboard({ user, onLogout }) {
                       <p className="text-sm text-gray-600 mt-2">
                         Jumlah: {formatCurrency(parseFloat(qrisAmount))}
                       </p>
-                      <p className="text-xs text-green-600 mt-1">✅ Bisa di-scan semua bank</p>
+                      <p className="text-xs text-green-600 mt-1">✅ Bisa di-scan semua bank & e-wallet</p>
                       <button
                         onClick={() => {
                           navigator.clipboard?.writeText(qrisCode)
@@ -867,7 +907,7 @@ function Dashboard({ user, onLogout }) {
                         }}
                         className="mt-2 bg-gray-600 text-white px-4 py-2 rounded text-sm hover:bg-gray-700 transition"
                       >
-                        📋 Copy QRIS
+                        📋 Copy QRIS Code
                       </button>
                     </div>
                   ) : (
@@ -884,72 +924,45 @@ function Dashboard({ user, onLogout }) {
             <div>
               <h2 className="text-xl font-bold mb-4">📷 Scan QRIS</h2>
               <p className="text-sm text-gray-600 mb-4">
-                Scan QRIS dari aplikasi bank lain untuk melakukan pembayaran otomatis
+                Scan QRIS dari aplikasi bank atau e-wallet lain untuk melakukan pembayaran otomatis
               </p>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  {!isScanning ? (
-                    <button
-                      onClick={startScanning}
-                      className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition text-lg font-semibold"
-                    >
-                      📷 Mulai Scan QRIS
-                    </button>
-                  ) : (
-                    <button
-                      onClick={stopScanning}
-                      className="w-full bg-red-600 text-white py-3 rounded-lg hover:bg-red-700 transition text-lg font-semibold"
-                    >
-                      ⏹ Stop Scanning
-                    </button>
-                  )}
-                  
-                  <div className="mt-4">
-                    <div 
-                      id="scanner-container" 
-                      className="w-full bg-black rounded-lg overflow-hidden"
-                      style={{ minHeight: '300px' }}
-                    >
-                      {!isScanning && (
-                        <div className="flex items-center justify-center h-64 bg-gray-100">
-                          <p className="text-gray-500">Tekan tombol untuk mulai scan</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <QRISScanner 
+                    onScanSuccess={handleScanSuccess}
+                  />
                 </div>
 
                 <div className="bg-gray-50 p-6 rounded-lg">
                   <h3 className="font-semibold mb-4">Hasil Scan</h3>
-                  {scanResult ? (
+                  {isProcessing ? (
+                    <div className="text-center py-8">
+                      <p className="text-blue-600">⏳ Memproses pembayaran...</p>
+                    </div>
+                  ) : scanResult ? (
                     <div className="bg-white p-4 rounded-lg border border-green-500">
                       <p className="text-green-600 font-bold">✅ QRIS Terdeteksi!</p>
-                      <p className="text-sm text-gray-600 mt-2">
+                      <p className="text-sm text-gray-600 mt-2 break-all">
                         Data: {scanResult.substring(0, 100)}...
                       </p>
-                      {qrData && (
-                        <div className="mt-3 space-y-2">
-                          <p className="text-sm">
-                            <span className="font-semibold">Jumlah:</span>{' '}
-                            {formatCurrency(qrData.amount)}
-                          </p>
-                          <p className="text-sm">
-                            <span className="font-semibold">Merchant:</span>{' '}
-                            {qrData.merchantName || 'Payment Gateway'}
-                          </p>
-                          <p className="text-sm">
-                            <span className="font-semibold">Status:</span>{' '}
-                            <span className="text-green-600">✅ Valid</span>
-                          </p>
-                        </div>
-                      )}
+                      <button
+                        onClick={() => {
+                          try {
+                            const data = JSON.parse(scanResult)
+                            alert(`Detail QRIS:\nMerchant: ${data.merchantName || 'Payment Gateway'}\nJumlah: Rp${data.amount.toLocaleString()}\nReferensi: ${data.reference}`)
+                          } catch {}
+                        }}
+                        className="mt-2 bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 transition"
+                      >
+                        📋 Lihat Detail
+                      </button>
                     </div>
                   ) : (
                     <div className="text-center py-8">
                       <p className="text-gray-500">Belum ada QRIS yang di-scan</p>
                       <p className="text-sm text-gray-400 mt-2">
-                        Scan QRIS dari aplikasi bank untuk pembayaran
+                        Scan QRIS dari aplikasi bank atau e-wallet untuk pembayaran
                       </p>
                     </div>
                   )}
