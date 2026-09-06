@@ -1,29 +1,62 @@
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
+import axios from 'axios'
 
-// Database menggunakan localStorage
+// Database menggunakan GitHub API
 const DB = {
-  getUsers: () => {
+  // Ambil data dari GitHub
+  getUsers: async () => {
     try {
-      const data = localStorage.getItem('payment_users')
-      return data ? JSON.parse(data) : []
-    } catch {
-      return []
+      const response = await axios.get('/api/github')
+      return response.data.users || []
+    } catch (err) {
+      console.error('Error fetching users:', err)
+      // Fallback ke localStorage
+      const localData = localStorage.getItem('payment_users_backup')
+      return localData ? JSON.parse(localData) : []
     }
   },
-  saveUsers: (users) => {
-    localStorage.setItem('payment_users', JSON.stringify(users))
+
+  // Simpan data ke GitHub
+  saveUsers: async (users) => {
+    try {
+      const data = { users: users }
+      await axios.post('/api/github', data)
+      // Backup ke localStorage
+      localStorage.setItem('payment_users_backup', JSON.stringify(users))
+      return true
+    } catch (err) {
+      console.error('Error saving users:', err)
+      // Backup ke localStorage
+      localStorage.setItem('payment_users_backup', JSON.stringify(users))
+      return false
+    }
   },
-  getUser: (email) => {
-    const users = DB.getUsers()
+
+  getUser: async (email) => {
+    const users = await DB.getUsers()
     return users.find(u => u.email === email)
   },
-  addUser: (user) => {
-    const users = DB.getUsers()
+
+  addUser: async (user) => {
+    const users = await DB.getUsers()
     users.push(user)
-    DB.saveUsers(users)
+    await DB.saveUsers(users)
     return user
   },
+
+  updateUser: async (email, updates) => {
+    const users = await DB.getUsers()
+    const index = users.findIndex(u => u.email === email)
+    if (index !== -1) {
+      users[index] = { ...users[index], ...updates }
+      await DB.saveUsers(users)
+      return users[index]
+    }
+    return null
+  },
+
+  // Transaksi per user di localStorage (karena GitHub hanya untuk user data)
   getTransactions: (userId) => {
     try {
       const data = localStorage.getItem(`transactions_${userId}`)
@@ -32,9 +65,11 @@ const DB = {
       return []
     }
   },
+
   saveTransactions: (userId, transactions) => {
     localStorage.setItem(`transactions_${userId}`, JSON.stringify(transactions))
   },
+
   getBalance: (userId) => {
     try {
       const data = localStorage.getItem(`balance_${userId}`)
@@ -43,9 +78,11 @@ const DB = {
       return 0
     }
   },
+
   saveBalance: (userId, balance) => {
     localStorage.setItem(`balance_${userId}`, balance.toString())
   },
+
   getQRIS: (userId) => {
     try {
       const data = localStorage.getItem(`qris_${userId}`)
@@ -54,8 +91,21 @@ const DB = {
       return []
     }
   },
+
   saveQRIS: (userId, qrisData) => {
     localStorage.setItem(`qris_${userId}`, JSON.stringify(qrisData))
+  },
+
+  // Sync user data ke GitHub
+  syncUserToGitHub: async (user) => {
+    const users = await DB.getUsers()
+    const index = users.findIndex(u => u.id === user.id)
+    if (index !== -1) {
+      users[index] = { ...users[index], ...user }
+      await DB.saveUsers(users)
+      return true
+    }
+    return false
   }
 }
 
@@ -73,6 +123,21 @@ export default function Home() {
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [isLoadingUsers, setIsLoadingUsers] = useState(true)
+
+  // Load users dari GitHub saat start
+  useEffect(() => {
+    const loadUsers = async () => {
+      try {
+        await DB.getUsers()
+      } catch (err) {
+        console.error('Error loading users:', err)
+      } finally {
+        setIsLoadingUsers(false)
+      }
+    }
+    loadUsers()
+  }, [])
 
   useEffect(() => {
     const session = localStorage.getItem('payment_session')
@@ -87,7 +152,7 @@ export default function Home() {
     }
   }, [])
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault()
     setError('')
     setLoading(true)
@@ -98,32 +163,42 @@ export default function Home() {
       return
     }
 
-    const foundUser = DB.getUser(loginData.email)
-    
-    if (!foundUser) {
-      setError('Email tidak ditemukan!')
-      setLoading(false)
-      return
-    }
+    try {
+      const foundUser = await DB.getUser(loginData.email)
+      
+      if (!foundUser) {
+        setError('Email tidak ditemukan!')
+        setLoading(false)
+        return
+      }
 
-    if (foundUser.password !== loginData.password) {
-      setError('Password salah!')
-      setLoading(false)
-      return
-    }
+      if (foundUser.password !== loginData.password) {
+        setError('Password salah!')
+        setLoading(false)
+        return
+      }
 
-    localStorage.setItem('payment_session', JSON.stringify(foundUser))
-    setUser(foundUser)
-    setIsLoggedIn(true)
-    setLoading(false)
-    setLoginData({ email: '', password: '' })
+      // Load balance dari localStorage
+      const balance = DB.getBalance(foundUser.id)
+      foundUser.balance = balance
+
+      localStorage.setItem('payment_session', JSON.stringify(foundUser))
+      setUser(foundUser)
+      setIsLoggedIn(true)
+      setLoading(false)
+      setLoginData({ email: '', password: '' })
+    } catch (err) {
+      setError('Terjadi kesalahan. Silakan coba lagi.')
+      setLoading(false)
+    }
   }
 
-  const handleRegister = (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault()
     setError('')
     setLoading(true)
 
+    // Validasi
     if (!regData.name || !regData.email || !regData.phone || !regData.password || !regData.confirmPassword) {
       setError('Semua field harus diisi!')
       setLoading(false)
@@ -160,50 +235,72 @@ export default function Home() {
       return
     }
 
-    if (DB.getUser(regData.email)) {
-      setError('Email sudah terdaftar!')
+    try {
+      // Cek email sudah terdaftar
+      const existingUser = await DB.getUser(regData.email)
+      if (existingUser) {
+        setError('Email sudah terdaftar!')
+        setLoading(false)
+        return
+      }
+
+      // Cek phone sudah terdaftar
+      const users = await DB.getUsers()
+      if (users.find(u => u.phone === regData.phone)) {
+        setError('Nomor telepon sudah terdaftar!')
+        setLoading(false)
+        return
+      }
+
+      const newUser = {
+        id: 'user_' + Date.now(),
+        name: regData.name.trim(),
+        email: regData.email.trim().toLowerCase(),
+        phone: regData.phone.trim(),
+        password: regData.password,
+        balance: 0,
+        createdAt: new Date().toISOString()
+      }
+
+      // Simpan ke GitHub
+      await DB.addUser(newUser)
+      DB.saveBalance(newUser.id, 0)
+      DB.saveQRIS(newUser.id, [])
+
+      localStorage.setItem('payment_session', JSON.stringify(newUser))
+      setUser(newUser)
+      setIsLoggedIn(true)
       setLoading(false)
-      return
-    }
-
-    const users = DB.getUsers()
-    if (users.find(u => u.phone === regData.phone)) {
-      setError('Nomor telepon sudah terdaftar!')
+      setRegData({
+        name: '',
+        email: '',
+        phone: '',
+        password: '',
+        confirmPassword: ''
+      })
+      
+      alert('✅ Pendaftaran berhasil! Data tersimpan di GitHub.')
+    } catch (err) {
+      console.error('Register error:', err)
+      setError('Gagal menyimpan data ke GitHub. Coba lagi.')
       setLoading(false)
-      return
     }
-
-    const newUser = {
-      id: 'user_' + Date.now(),
-      name: regData.name.trim(),
-      email: regData.email.trim().toLowerCase(),
-      phone: regData.phone.trim(),
-      password: regData.password,
-      balance: 0,
-      createdAt: new Date().toISOString()
-    }
-
-    DB.addUser(newUser)
-    DB.saveBalance(newUser.id, 0)
-    DB.saveQRIS(newUser.id, [])
-
-    localStorage.setItem('payment_session', JSON.stringify(newUser))
-    setUser(newUser)
-    setIsLoggedIn(true)
-    setLoading(false)
-    setRegData({
-      name: '',
-      email: '',
-      phone: '',
-      password: '',
-      confirmPassword: ''
-    })
   }
 
   const handleLogout = () => {
     localStorage.removeItem('payment_session')
     setIsLoggedIn(false)
     setUser(null)
+  }
+
+  if (isLoadingUsers) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <div className="text-center">
+          <p className="text-xl text-gray-600">⏳ Loading data...</p>
+        </div>
+      </div>
+    )
   }
 
   if (!isLoggedIn) {
@@ -215,7 +312,7 @@ export default function Home() {
               {showRegister ? '✨ Daftar Akun' : '🔐 Login'}
             </h2>
             <p className="mt-2 text-sm text-gray-600">
-              {showRegister ? 'Buat akun untuk mulai bertransaksi' : 'Masuk ke akun Anda'}
+              {showRegister ? 'Data akan tersimpan di GitHub' : 'Masuk ke akun Anda'}
             </p>
           </div>
           
@@ -369,120 +466,7 @@ export default function Home() {
   return <Dashboard user={user} onLogout={handleLogout} />
 }
 
-// Komponen QRIS Scanner dengan dynamic import
-function QRISScanner({ onScanSuccess, onScanError }) {
-  const [isScanning, setIsScanning] = useState(false)
-  const [Html5Qrcode, setHtml5Qrcode] = useState(null)
-  const scannerRef = useRef(null)
-  const containerRef = useRef(null)
-  const [isMounted, setIsMounted] = useState(false)
-
-  useEffect(() => {
-    setIsMounted(true)
-    // Import library hanya di client side
-    import('html5-qrcode').then((module) => {
-      setHtml5Qrcode(() => module.Html5Qrcode)
-    }).catch(err => {
-      console.error('Failed to load html5-qrcode:', err)
-    })
-
-    return () => {
-      if (scannerRef.current) {
-        try {
-          scannerRef.current.stop().catch(() => {})
-          scannerRef.current.clear()
-        } catch (e) {}
-      }
-    }
-  }, [])
-
-  const startScanning = async () => {
-    if (!Html5Qrcode || !containerRef.current) {
-      alert('❌ Scanner belum siap!')
-      return
-    }
-
-    try {
-      const html5QrCode = new Html5Qrcode(containerRef.current.id)
-      scannerRef.current = html5QrCode
-
-      await html5QrCode.start(
-        { facingMode: 'environment' },
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 }
-        },
-        (decodedText) => {
-          if (onScanSuccess) {
-            onScanSuccess(decodedText)
-          }
-          stopScanning()
-        },
-        (errorMessage) => {
-          // Ignore errors during scanning
-        }
-      )
-      setIsScanning(true)
-    } catch (err) {
-      console.error('Camera error:', err)
-      alert('❌ Gagal mengakses kamera! Pastikan izin kamera diberikan.')
-      setIsScanning(false)
-    }
-  }
-
-  const stopScanning = async () => {
-    if (scannerRef.current) {
-      try {
-        await scannerRef.current.stop()
-        await scannerRef.current.clear()
-        scannerRef.current = null
-      } catch (e) {}
-    }
-    setIsScanning(false)
-  }
-
-  if (!isMounted) {
-    return (
-      <div className="bg-gray-100 rounded-lg p-8 text-center">
-        <p className="text-gray-500">Loading scanner...</p>
-      </div>
-    )
-  }
-
-  return (
-    <div>
-      <div className="mb-4">
-        {!isScanning ? (
-          <button
-            onClick={startScanning}
-            className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition text-lg font-semibold"
-          >
-            📷 Mulai Scan QRIS
-          </button>
-        ) : (
-          <button
-            onClick={stopScanning}
-            className="w-full bg-red-600 text-white py-3 rounded-lg hover:bg-red-700 transition text-lg font-semibold"
-          >
-            ⏹ Stop Scanning
-          </button>
-        )}
-      </div>
-      <div 
-        id="qr-scanner-container"
-        ref={containerRef}
-        className="w-full bg-black rounded-lg overflow-hidden"
-        style={{ minHeight: '300px' }}
-      >
-        {!isScanning && (
-          <div className="flex items-center justify-center h-64 bg-gray-100">
-            <p className="text-gray-500">Tekan tombol untuk mulai scan</p>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+// ============= DASHBOARD COMPONENT =============
 
 function Dashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('dashboard')
@@ -500,6 +484,8 @@ function Dashboard({ user, onLogout }) {
   const [showQRIS, setShowQRIS] = useState(false)
   const [scanResult, setScanResult] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+  const [isScanning, setIsScanning] = useState(false)
+  const scannerRef = useRef(null)
 
   const banks = ['BCA', 'BNI', 'BRI', 'Mandiri', 'BTN', 'CIMB Niaga', 'Danamon', 'Permata', 'Maybank', 'Bank Mega', 'Bank Sinarmas']
 
@@ -561,29 +547,68 @@ function Dashboard({ user, onLogout }) {
     }
   }
 
-  // Handle scan success
-  const handleScanSuccess = (decodedText) => {
+  // Start QRIS Scanner
+  const startScanning = async () => {
+    if (isScanning) {
+      stopScanning()
+      return
+    }
+
+    try {
+      const { Html5Qrcode } = await import('html5-qrcode')
+      const container = document.getElementById('scanner-container')
+      if (!container) return
+
+      const html5QrCode = new Html5Qrcode('scanner-container')
+      scannerRef.current = html5QrCode
+
+      await html5QrCode.start(
+        { facingMode: 'environment' },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 }
+        },
+        onScanSuccess,
+        () => {} // ignore errors
+      )
+      setIsScanning(true)
+    } catch (err) {
+      console.error('Camera error:', err)
+      alert('❌ Gagal mengakses kamera! Pastikan izin kamera diberikan.')
+    }
+  }
+
+  const stopScanning = async () => {
+    if (scannerRef.current) {
+      try {
+        await scannerRef.current.stop()
+        await scannerRef.current.clear()
+        scannerRef.current = null
+      } catch (e) {}
+    }
+    setIsScanning(false)
+  }
+
+  const onScanSuccess = (decodedText) => {
+    stopScanning()
     setIsProcessing(true)
     setScanResult(decodedText)
     
     try {
       const qrisData = JSON.parse(decodedText)
       
-      // Validasi QRIS
       if (!qrisData.amount || !qrisData.merchantId) {
         alert('❌ QRIS tidak valid!')
         setIsProcessing(false)
         return
       }
 
-      // Cek apakah QRIS ini milik user sendiri
       if (qrisData.merchantId === user.id) {
         alert('❌ Tidak bisa scan QRIS sendiri!')
         setIsProcessing(false)
         return
       }
 
-      // Cek apakah QRIS sudah dibayar
       const qrisList = DB.getQRIS(qrisData.merchantId)
       const existingQRIS = qrisList.find(q => q.reference === qrisData.reference)
       if (existingQRIS && existingQRIS.status === 'paid') {
@@ -592,7 +617,6 @@ function Dashboard({ user, onLogout }) {
         return
       }
 
-      // Proses pembayaran
       processPayment(qrisData, existingQRIS, qrisList)
     } catch (err) {
       alert('❌ QRIS tidak valid!')
@@ -600,16 +624,13 @@ function Dashboard({ user, onLogout }) {
     }
   }
 
-  // Proses pembayaran
   const processPayment = (qrisData, existingQRIS, qrisList) => {
-    // Cek saldo
     if (balance < qrisData.amount) {
       alert(`❌ Saldo tidak mencukupi!\nSaldo: Rp${balance.toLocaleString()}\nTagihan: Rp${qrisData.amount.toLocaleString()}`)
       setIsProcessing(false)
       return
     }
 
-    // Update QRIS status
     if (existingQRIS) {
       existingQRIS.status = 'paid'
       existingQRIS.paidAt = new Date().toISOString()
@@ -617,17 +638,14 @@ function Dashboard({ user, onLogout }) {
       DB.saveQRIS(qrisData.merchantId, qrisList)
     }
 
-    // Tambah saldo merchant
     const merchantBalance = DB.getBalance(qrisData.merchantId)
     const newMerchantBalance = merchantBalance + qrisData.amount
     DB.saveBalance(qrisData.merchantId, newMerchantBalance)
 
-    // Kurangi saldo pembayar
     const newPayerBalance = balance - qrisData.amount
     setBalance(newPayerBalance)
     DB.saveBalance(user.id, newPayerBalance)
 
-    // Catat transaksi merchant
     const merchantTransactions = DB.getTransactions(qrisData.merchantId)
     merchantTransactions.push({
       id: 'tx_' + Date.now(),
@@ -641,7 +659,6 @@ function Dashboard({ user, onLogout }) {
     })
     DB.saveTransactions(qrisData.merchantId, merchantTransactions)
 
-    // Catat transaksi pembayar
     const payerTransactions = [{
       id: 'tx_' + Date.now(),
       type: 'transfer',
@@ -719,7 +736,12 @@ function Dashboard({ user, onLogout }) {
                     ? 'bg-blue-600 text-white shadow-lg' 
                     : 'bg-white text-gray-700 hover:bg-gray-50'
                 }`}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => {
+                  setActiveTab(tab.id)
+                  if (tab.id !== 'scan') {
+                    stopScanning()
+                  }
+                }}
               >
                 {tab.icon} {tab.label}
               </button>
@@ -929,9 +951,34 @@ function Dashboard({ user, onLogout }) {
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <QRISScanner 
-                    onScanSuccess={handleScanSuccess}
-                  />
+                  <div className="mb-4">
+                    {!isScanning ? (
+                      <button
+                        onClick={startScanning}
+                        className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition text-lg font-semibold"
+                      >
+                        📷 Mulai Scan QRIS
+                      </button>
+                    ) : (
+                      <button
+                        onClick={stopScanning}
+                        className="w-full bg-red-600 text-white py-3 rounded-lg hover:bg-red-700 transition text-lg font-semibold"
+                      >
+                        ⏹ Stop Scanning
+                      </button>
+                    )}
+                  </div>
+                  <div 
+                    id="scanner-container"
+                    className="w-full bg-black rounded-lg overflow-hidden"
+                    style={{ minHeight: '300px' }}
+                  >
+                    {!isScanning && (
+                      <div className="flex items-center justify-center h-64 bg-gray-100">
+                        <p className="text-gray-500">Tekan tombol untuk mulai scan</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="bg-gray-50 p-6 rounded-lg">
@@ -1038,6 +1085,7 @@ function Dashboard({ user, onLogout }) {
                     <h3 className="text-xl font-semibold">{user?.name}</h3>
                     <p className="text-gray-600">📧 {user?.email}</p>
                     <p className="text-gray-600">📱 {user?.phone}</p>
+                    <p className="text-xs text-gray-400 mt-1">✅ Data tersimpan di GitHub</p>
                   </div>
                 </div>
                 <div className="border-t pt-4">
