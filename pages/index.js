@@ -1,16 +1,67 @@
 import { useState, useEffect } from 'react'
 
-// Gunakan localStorage sebagai database utama
-const STORAGE_KEY = 'payment_gateway_users'
-const TRANSACTIONS_KEY = 'payment_gateway_transactions'
+// Database menggunakan localStorage
+const DB = {
+  getUsers: () => {
+    try {
+      const data = localStorage.getItem('payment_users')
+      return data ? JSON.parse(data) : []
+    } catch {
+      return []
+    }
+  },
+  saveUsers: (users) => {
+    localStorage.setItem('payment_users', JSON.stringify(users))
+  },
+  getUser: (email) => {
+    const users = DB.getUsers()
+    return users.find(u => u.email === email)
+  },
+  addUser: (user) => {
+    const users = DB.getUsers()
+    users.push(user)
+    DB.saveUsers(users)
+    return user
+  },
+  updateUser: (email, updates) => {
+    const users = DB.getUsers()
+    const index = users.findIndex(u => u.email === email)
+    if (index !== -1) {
+      users[index] = { ...users[index], ...updates }
+      DB.saveUsers(users)
+      return users[index]
+    }
+    return null
+  },
+  getTransactions: (userId) => {
+    try {
+      const data = localStorage.getItem(`transactions_${userId}`)
+      return data ? JSON.parse(data) : []
+    } catch {
+      return []
+    }
+  },
+  saveTransactions: (userId, transactions) => {
+    localStorage.setItem(`transactions_${userId}`, JSON.stringify(transactions))
+  },
+  getBalance: (userId) => {
+    try {
+      const data = localStorage.getItem(`balance_${userId}`)
+      return data ? parseFloat(data) : 0
+    } catch {
+      return 0
+    }
+  },
+  saveBalance: (userId, balance) => {
+    localStorage.setItem(`balance_${userId}`, balance.toString())
+  }
+}
 
 export default function Home() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
   const [user, setUser] = useState(null)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
+  const [loginData, setLoginData] = useState({ email: '', password: '' })
   const [regData, setRegData] = useState({
     name: '',
     email: '',
@@ -18,88 +69,94 @@ export default function Home() {
     password: '',
     confirmPassword: ''
   })
+  const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Load data dari GitHub saat pertama kali
-  const loadUsersFromGitHub = async () => {
-    try {
-      const response = await fetch('https://raw.githubusercontent.com/agilnrssf10928/PAYMENT-/refs/heads/main/database.json')
-      const data = await response.json()
-      
-      if (data && data.users) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.users))
-        console.log('Users loaded from GitHub:', data.users.length)
-      }
-      return data?.users || []
-    } catch (err) {
-      console.error('Error loading from GitHub:', err)
-      // Jika gagal, coba dari localStorage
-      const localUsers = localStorage.getItem(STORAGE_KEY)
-      if (localUsers) {
-        return JSON.parse(localUsers)
-      }
-      return []
-    }
-  }
-
-  // Ambil semua users
-  const getUsers = () => {
-    const users = localStorage.getItem(STORAGE_KEY)
-    return users ? JSON.parse(users) : []
-  }
-
-  // Simpan users
-  const saveUsers = (users) => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(users))
-  }
-
   useEffect(() => {
-    // Cek login status
-    const token = localStorage.getItem('token')
-    const userData = localStorage.getItem('user')
-    if (token && userData) {
-      setIsLoggedIn(true)
-      setUser(JSON.parse(userData))
+    // Cek session
+    const session = localStorage.getItem('payment_session')
+    if (session) {
+      try {
+        const userData = JSON.parse(session)
+        setUser(userData)
+        setIsLoggedIn(true)
+      } catch {
+        localStorage.removeItem('payment_session')
+      }
     }
-
-    // Load data dari GitHub
-    loadUsersFromGitHub()
   }, [])
 
-  const handleLogin = async (e) => {
+  const handleLogin = (e) => {
     e.preventDefault()
     setError('')
     setLoading(true)
-    
-    try {
-      // Load users dari GitHub
-      const users = await loadUsersFromGitHub()
-      const foundUser = users.find(u => u.email === email && u.password === password)
-      
-      if (foundUser) {
-        localStorage.setItem('token', 'dummy-token-' + Date.now())
-        localStorage.setItem('user', JSON.stringify(foundUser))
-        setIsLoggedIn(true)
-        setUser(foundUser)
-        setLoading(false)
-      } else {
-        setError('Email atau password salah')
-        setLoading(false)
-      }
-    } catch (err) {
-      setError('Terjadi kesalahan. Silakan coba lagi.')
+
+    // Validasi input
+    if (!loginData.email || !loginData.password) {
+      setError('Email dan password wajib diisi!')
       setLoading(false)
+      return
     }
+
+    // Cari user
+    const foundUser = DB.getUser(loginData.email)
+    
+    if (!foundUser) {
+      setError('Email tidak ditemukan!')
+      setLoading(false)
+      return
+    }
+
+    if (foundUser.password !== loginData.password) {
+      setError('Password salah!')
+      setLoading(false)
+      return
+    }
+
+    // Login sukses
+    localStorage.setItem('payment_session', JSON.stringify(foundUser))
+    setUser(foundUser)
+    setIsLoggedIn(true)
+    setLoading(false)
+    setLoginData({ email: '', password: '' })
   }
 
-  const handleRegister = async (e) => {
+  const handleRegister = (e) => {
     e.preventDefault()
     setError('')
     setLoading(true)
 
-    // Validasi
-    if (!regData.name || !regData.email || !regData.phone || !regData.password) {
+    // Validasi field
+    if (!regData.name || !regData.email || !regData.phone || !regData.password || !regData.confirmPassword) {
       setError('Semua field harus diisi!')
+      setLoading(false)
+      return
+    }
+
+    // Validasi nama
+    if (regData.name.length < 3) {
+      setError('Nama minimal 3 karakter!')
+      setLoading(false)
+      return
+    }
+
+    // Validasi email
+    if (!regData.email.includes('@') || !regData.email.includes('.')) {
+      setError('Email tidak valid!')
+      setLoading(false)
+      return
+    }
+
+    // Validasi phone
+    if (regData.phone.length < 10 || regData.phone.length > 15) {
+      setError('Nomor telepon harus 10-15 digit!')
+      setLoading(false)
+      return
+    }
+
+    // Validasi password
+    if (regData.password.length < 6) {
+      setError('Password minimal 6 karakter!')
       setLoading(false)
       return
     }
@@ -110,101 +167,80 @@ export default function Home() {
       return
     }
 
-    if (regData.password.length < 6) {
-      setError('Password minimal 6 karakter!')
+    // Cek email sudah terdaftar
+    if (DB.getUser(regData.email)) {
+      setError('Email sudah terdaftar!')
       setLoading(false)
       return
     }
 
-    try {
-      // Ambil users dari localStorage
-      let users = getUsers()
-      
-      // Cek email sudah terdaftar
-      if (users.find(u => u.email === regData.email)) {
-        setError('Email sudah terdaftar!')
-        setLoading(false)
-        return
-      }
-
-      // Cek phone sudah terdaftar
-      if (users.find(u => u.phone === regData.phone)) {
-        setError('Nomor telepon sudah terdaftar!')
-        setLoading(false)
-        return
-      }
-
-      // Buat user baru
-      const newUser = {
-        id: 'user_' + Date.now(),
-        name: regData.name.trim(),
-        email: regData.email.trim(),
-        phone: regData.phone.trim(),
-        password: regData.password,
-        balance: 0,
-        createdAt: new Date().toISOString()
-      }
-
-      // Simpan ke localStorage
-      users.push(newUser)
-      saveUsers(users)
-
-      // Simpan data user yang login
-      localStorage.setItem('token', 'dummy-token-' + Date.now())
-      localStorage.setItem('user', JSON.stringify(newUser))
-      
-      // Reset form
-      setRegData({
-        name: '',
-        email: '',
-        phone: '',
-        password: '',
-        confirmPassword: ''
-      })
-
-      setIsLoggedIn(true)
-      setUser(newUser)
+    // Cek phone sudah terdaftar
+    const users = DB.getUsers()
+    if (users.find(u => u.phone === regData.phone)) {
+      setError('Nomor telepon sudah terdaftar!')
       setLoading(false)
-      
-      alert('🎉 Pendaftaran berhasil! Selamat datang ' + newUser.name)
-    } catch (err) {
-      console.error('Register error:', err)
-      setError('Terjadi kesalahan. Silakan coba lagi.')
-      setLoading(false)
+      return
     }
+
+    // Buat user baru
+    const newUser = {
+      id: 'user_' + Date.now(),
+      name: regData.name.trim(),
+      email: regData.email.trim().toLowerCase(),
+      phone: regData.phone.trim(),
+      password: regData.password,
+      balance: 0,
+      createdAt: new Date().toISOString()
+    }
+
+    // Simpan ke database
+    DB.addUser(newUser)
+    DB.saveBalance(newUser.id, 0)
+
+    // Login otomatis
+    localStorage.setItem('payment_session', JSON.stringify(newUser))
+    setUser(newUser)
+    setIsLoggedIn(true)
+    setLoading(false)
+    setRegData({
+      name: '',
+      email: '',
+      phone: '',
+      password: '',
+      confirmPassword: ''
+    })
   }
 
   const handleLogout = () => {
+    localStorage.removeItem('payment_session')
     setIsLoggedIn(false)
     setUser(null)
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
   }
 
   if (!isLoggedIn) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8 bg-white p-8 rounded-2xl shadow-2xl">
-          <div>
-            <h2 className="text-center text-3xl font-extrabold text-gray-900">
-              {showRegister ? '✨ Daftar Akun' : '🔐 Login ke Payment Gateway'}
+          <div className="text-center">
+            <h2 className="text-3xl font-extrabold text-gray-900">
+              {showRegister ? '✨ Daftar Akun' : '🔐 Login'}
             </h2>
-            <p className="mt-2 text-center text-sm text-gray-600">
+            <p className="mt-2 text-sm text-gray-600">
               {showRegister ? 'Buat akun untuk mulai bertransaksi' : 'Masuk ke akun Anda'}
             </p>
           </div>
           
           {!showRegister ? (
             <form className="mt-8 space-y-6" onSubmit={handleLogin}>
-              <div className="rounded-md shadow-sm -space-y-px">
+              <div className="space-y-4">
                 <div>
                   <input
                     type="email"
                     required
-                    className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                     placeholder="Email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    value={loginData.email}
+                    onChange={(e) => setLoginData({...loginData, email: e.target.value})}
                     disabled={loading}
                   />
                 </div>
@@ -212,10 +248,10 @@ export default function Home() {
                   <input
                     type="password"
                     required
-                    className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                     placeholder="Password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    value={loginData.password}
+                    onChange={(e) => setLoginData({...loginData, password: e.target.value})}
                     disabled={loading}
                   />
                 </div>
@@ -227,24 +263,35 @@ export default function Home() {
                 </div>
               )}
 
-              <div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                {loading ? '⏳ Loading...' : 'Login'}
+              </button>
+
+              <div className="text-center">
                 <button
-                  type="submit"
-                  disabled={loading}
-                  className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                  type="button"
+                  onClick={() => {
+                    setShowRegister(true)
+                    setError('')
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-500"
                 >
-                  {loading ? '⏳ Loading...' : 'Login'}
+                  Belum punya akun? Daftar di sini
                 </button>
               </div>
             </form>
           ) : (
             <form className="mt-8 space-y-6" onSubmit={handleRegister}>
-              <div className="rounded-md shadow-sm space-y-2">
+              <div className="space-y-3">
                 <div>
                   <input
                     type="text"
                     required
-                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                     placeholder="Nama Lengkap"
                     value={regData.name}
                     onChange={(e) => setRegData({...regData, name: e.target.value})}
@@ -255,7 +302,7 @@ export default function Home() {
                   <input
                     type="email"
                     required
-                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                     placeholder="Email"
                     value={regData.email}
                     onChange={(e) => setRegData({...regData, email: e.target.value})}
@@ -266,7 +313,7 @@ export default function Home() {
                   <input
                     type="tel"
                     required
-                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                     placeholder="Nomor Telepon"
                     value={regData.phone}
                     onChange={(e) => setRegData({...regData, phone: e.target.value})}
@@ -277,7 +324,7 @@ export default function Home() {
                   <input
                     type="password"
                     required
-                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                     placeholder="Password (min 6 karakter)"
                     value={regData.password}
                     onChange={(e) => setRegData({...regData, password: e.target.value})}
@@ -288,7 +335,7 @@ export default function Home() {
                   <input
                     type="password"
                     required
-                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                     placeholder="Konfirmasi Password"
                     value={regData.confirmPassword}
                     onChange={(e) => setRegData({...regData, confirmPassword: e.target.value})}
@@ -303,30 +350,28 @@ export default function Home() {
                 </div>
               )}
 
-              <div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                {loading ? '⏳ Proses...' : 'Daftar'}
+              </button>
+
+              <div className="text-center">
                 <button
-                  type="submit"
-                  disabled={loading}
-                  className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                  type="button"
+                  onClick={() => {
+                    setShowRegister(false)
+                    setError('')
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-500"
                 >
-                  {loading ? '⏳ Proses...' : 'Daftar'}
+                  Sudah punya akun? Login di sini
                 </button>
               </div>
             </form>
           )}
-          
-          <div className="text-center">
-            <button
-              onClick={() => {
-                setShowRegister(!showRegister)
-                setError('')
-              }}
-              className="text-sm text-blue-600 hover:text-blue-500"
-              disabled={loading}
-            >
-              {showRegister ? 'Sudah punya akun? Login di sini' : 'Belum punya akun? Daftar di sini'}
-            </button>
-          </div>
         </div>
       </div>
     )
@@ -337,8 +382,8 @@ export default function Home() {
 
 function Dashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [balance, setBalance] = useState(user?.balance || 0)
-  const [transactions, setTransactions] = useState([])
+  const [balance, setBalance] = useState(DB.getBalance(user.id))
+  const [transactions, setTransactions] = useState(DB.getTransactions(user.id))
   const [transferData, setTransferData] = useState({
     bank: '',
     accountNumber: '',
@@ -351,39 +396,35 @@ function Dashboard({ user, onLogout }) {
 
   const banks = ['BCA', 'BNI', 'BRI', 'Mandiri', 'BTN', 'CIMB Niaga', 'Danamon', 'Permata', 'Maybank', 'Bank Mega', 'Bank Sinarmas']
 
-  useEffect(() => {
-    const savedTransactions = localStorage.getItem('transactions_' + user.id)
-    if (savedTransactions) {
-      setTransactions(JSON.parse(savedTransactions))
-    }
-    const savedBalance = localStorage.getItem(`balance_${user.id}`)
-    if (savedBalance) {
-      setBalance(parseFloat(savedBalance))
-    }
-  }, [user])
+  const refreshData = () => {
+    setBalance(DB.getBalance(user.id))
+    setTransactions(DB.getTransactions(user.id))
+  }
 
   const handleTransfer = (e) => {
     e.preventDefault()
     
     if (!transferData.bank || !transferData.accountNumber || !transferData.amount) {
-      alert('Semua field harus diisi!')
+      alert('❌ Semua field harus diisi!')
       return
     }
 
-    if (parseFloat(transferData.amount) <= 0) {
-      alert('Jumlah transfer harus lebih dari 0!')
+    const amount = parseFloat(transferData.amount)
+    if (amount <= 0) {
+      alert('❌ Jumlah transfer harus lebih dari 0!')
       return
     }
 
-    if (parseFloat(transferData.amount) > balance) {
-      alert('Saldo tidak mencukupi! Saldo Anda: Rp' + balance.toLocaleString())
+    if (amount > balance) {
+      alert(`❌ Saldo tidak mencukupi!\nSaldo Anda: Rp${balance.toLocaleString()}`)
       return
     }
 
+    // Buat transaksi
     const newTransaction = {
       id: 'tx_' + Date.now(),
       type: 'transfer',
-      amount: -parseFloat(transferData.amount),
+      amount: -amount,
       bank: transferData.bank,
       accountNumber: transferData.accountNumber,
       note: transferData.note || '-',
@@ -393,26 +434,27 @@ function Dashboard({ user, onLogout }) {
 
     const updatedTransactions = [newTransaction, ...transactions]
     setTransactions(updatedTransactions)
-    localStorage.setItem('transactions_' + user.id, JSON.stringify(updatedTransactions))
+    DB.saveTransactions(user.id, updatedTransactions)
 
-    const newBalance = balance - parseFloat(transferData.amount)
+    const newBalance = balance - amount
     setBalance(newBalance)
-    localStorage.setItem(`balance_${user.id}`, newBalance.toString())
+    DB.saveBalance(user.id, newBalance)
 
-    alert('✅ Transfer berhasil!\nBank: ' + transferData.bank + '\nJumlah: Rp' + parseFloat(transferData.amount).toLocaleString())
+    alert(`✅ Transfer berhasil!\nBank: ${transferData.bank}\nJumlah: Rp${amount.toLocaleString()}`)
     setTransferData({ bank: '', accountNumber: '', amount: '', note: '' })
   }
 
   const generateQRIS = () => {
     if (!qrisAmount || parseFloat(qrisAmount) <= 0) {
-      alert('Masukkan jumlah yang valid!')
+      alert('❌ Masukkan jumlah yang valid!')
       return
     }
 
+    const amount = parseFloat(qrisAmount)
     const qrisData = {
       id: 'qris_' + Date.now(),
       merchant: 'Payment Gateway',
-      amount: parseFloat(qrisAmount),
+      amount: amount,
       timestamp: new Date().toISOString(),
       reference: 'QR-' + Date.now()
     }
@@ -421,12 +463,12 @@ function Dashboard({ user, onLogout }) {
     setQrisCode(qrCode)
     setShowQRIS(true)
     
-    alert('✅ QRIS berhasil dibuat!\nJumlah: Rp' + parseFloat(qrisAmount).toLocaleString())
+    alert(`✅ QRIS berhasil dibuat!\nJumlah: Rp${amount.toLocaleString()}`)
   }
 
   const handleScanQRIS = () => {
     if (!qrisCode) {
-      alert('Silakan generate QRIS terlebih dahulu!')
+      alert('❌ Silakan generate QRIS terlebih dahulu!')
       return
     }
 
@@ -434,10 +476,11 @@ function Dashboard({ user, onLogout }) {
       const qrisData = JSON.parse(atob(qrisCode))
       
       if (!qrisData || !qrisData.amount) {
-        alert('QRIS tidak valid!')
+        alert('❌ QRIS tidak valid!')
         return
       }
 
+      // Proses pembayaran
       const newTransaction = {
         id: 'tx_' + Date.now(),
         type: 'receive',
@@ -450,18 +493,18 @@ function Dashboard({ user, onLogout }) {
 
       const updatedTransactions = [newTransaction, ...transactions]
       setTransactions(updatedTransactions)
-      localStorage.setItem('transactions_' + user.id, JSON.stringify(updatedTransactions))
+      DB.saveTransactions(user.id, updatedTransactions)
 
       const newBalance = balance + qrisData.amount
       setBalance(newBalance)
-      localStorage.setItem(`balance_${user.id}`, newBalance.toString())
+      DB.saveBalance(user.id, newBalance)
 
-      alert('✅ Pembayaran berhasil!\nJumlah: +Rp' + qrisData.amount.toLocaleString())
+      alert(`✅ Pembayaran berhasil!\nJumlah: +Rp${qrisData.amount.toLocaleString()}`)
       setShowQRIS(false)
       setQrisCode('')
       setQrisAmount('')
     } catch (err) {
-      alert('QRIS tidak valid! Silakan generate ulang.')
+      alert('❌ QRIS tidak valid! Silakan generate ulang.')
     }
   }
 
@@ -475,11 +518,11 @@ function Dashboard({ user, onLogout }) {
 
   return (
     <div className="min-h-screen bg-gray-100">
-      <nav className="bg-blue-600 text-white p-4 shadow-lg">
+      <nav className="bg-blue-600 text-white p-4 shadow-lg sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex justify-between items-center flex-wrap">
           <h1 className="text-2xl font-bold">💰 Payment Gateway</h1>
           <div className="flex items-center space-x-4 flex-wrap">
-            <span className="text-sm">👋 Halo, {user?.name}</span>
+            <span className="text-sm">👋 {user?.name}</span>
             <button
               onClick={onLogout}
               className="bg-red-500 px-4 py-2 rounded hover:bg-red-600 text-sm transition"
@@ -491,46 +534,48 @@ function Dashboard({ user, onLogout }) {
       </nav>
 
       <div className="max-w-7xl mx-auto p-4">
-        <div className="mb-6 bg-white rounded-lg shadow p-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="text-center">
-              <p className="text-gray-600">Total Saldo</p>
-              <p className="text-3xl font-bold text-blue-600">{formatCurrency(balance)}</p>
-            </div>
-            <div className="text-center">
-              <p className="text-gray-600">Total Transaksi</p>
-              <p className="text-3xl font-bold text-green-600">{transactions.length}</p>
-            </div>
-            <div className="text-center">
-              <p className="text-gray-600">Status</p>
-              <p className="text-3xl font-bold text-green-600">✅ Aktif</p>
-            </div>
+        {/* Summary Cards */}
+        <div className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white rounded-lg shadow p-4 text-center">
+            <p className="text-gray-600 text-sm">Total Saldo</p>
+            <p className="text-2xl font-bold text-blue-600">{formatCurrency(balance)}</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4 text-center">
+            <p className="text-gray-600 text-sm">Total Transaksi</p>
+            <p className="text-2xl font-bold text-green-600">{transactions.length}</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4 text-center">
+            <p className="text-gray-600 text-sm">Status</p>
+            <p className="text-2xl font-bold text-green-600">✅ Aktif</p>
           </div>
         </div>
 
-        <div className="mb-6">
-          <div className="flex flex-wrap gap-2">
-            {['dashboard', 'transfer', 'qris', 'history', 'profile'].map(tab => (
+        {/* Navigation Tabs */}
+        <div className="mb-6 overflow-x-auto">
+          <div className="flex flex-nowrap gap-2">
+            {[
+              { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+              { id: 'transfer', icon: '💸', label: 'Transfer' },
+              { id: 'qris', icon: '📱', label: 'QRIS' },
+              { id: 'history', icon: '📜', label: 'History' },
+              { id: 'profile', icon: '👤', label: 'Profile' }
+            ].map(tab => (
               <button
-                key={tab}
-                className={`px-4 py-2 rounded capitalize transition ${
-                  activeTab === tab 
+                key={tab.id}
+                className={`px-4 py-2 rounded-lg whitespace-nowrap transition ${
+                  activeTab === tab.id 
                     ? 'bg-blue-600 text-white shadow-lg' 
                     : 'bg-white text-gray-700 hover:bg-gray-50'
                 }`}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => setActiveTab(tab.id)}
               >
-                {tab === 'dashboard' && '📊'}
-                {tab === 'transfer' && '💸'}
-                {tab === 'qris' && '📱'}
-                {tab === 'history' && '📜'}
-                {tab === 'profile' && '👤'}
-                {' '}{tab}
+                {tab.icon} {tab.label}
               </button>
             ))}
           </div>
         </div>
 
+        {/* Content */}
         <div className="bg-white rounded-lg shadow p-6">
           {activeTab === 'dashboard' && (
             <div>
@@ -543,10 +588,15 @@ function Dashboard({ user, onLogout }) {
                 <div className="bg-green-50 p-4 rounded-lg">
                   <h3 className="font-semibold mb-2">Transaksi Terakhir</h3>
                   {transactions.length > 0 ? (
-                    <p className="text-sm">
-                      {transactions[0].type === 'transfer' ? 'Transfer keluar' : 'Penerimaan'} -{' '}
-                      {formatCurrency(Math.abs(transactions[0].amount))}
-                    </p>
+                    <div>
+                      <p className="text-sm">
+                        {transactions[0].type === 'transfer' ? 'Transfer keluar' : 'Penerimaan'} -{' '}
+                        {formatCurrency(Math.abs(transactions[0].amount))}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {new Date(transactions[0].date).toLocaleDateString('id-ID')}
+                      </p>
+                    </div>
                   ) : (
                     <p className="text-gray-500">Belum ada transaksi</p>
                   )}
@@ -557,7 +607,7 @@ function Dashboard({ user, onLogout }) {
 
           {activeTab === 'transfer' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">💸 Transfer ke Semua Bank</h2>
+              <h2 className="text-xl font-bold mb-4">💸 Transfer ke Bank</h2>
               <form onSubmit={handleTransfer} className="space-y-4 max-w-md">
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Pilih Bank</label>
@@ -668,7 +718,7 @@ function Dashboard({ user, onLogout }) {
                           }}
                           className="mt-2 bg-gray-600 text-white px-4 py-2 rounded text-sm hover:bg-gray-700 transition"
                         >
-                          📋 Copy QRIS Code
+                          📋 Copy QRIS
                         </button>
                       </div>
                     )}
@@ -682,9 +732,11 @@ function Dashboard({ user, onLogout }) {
             <div>
               <h2 className="text-xl font-bold mb-4">📜 History Transaksi</h2>
               {transactions.length === 0 ? (
-                <p className="text-gray-500 text-center py-8">Belum ada transaksi</p>
+                <div className="text-center py-8">
+                  <p className="text-gray-500">Belum ada transaksi</p>
+                </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {transactions.map((transaction) => (
                     <div
                       key={transaction.id}
@@ -692,8 +744,8 @@ function Dashboard({ user, onLogout }) {
                         transaction.type === 'transfer' ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'
                       }`}
                     >
-                      <div className="flex justify-between items-start flex-wrap">
-                        <div>
+                      <div className="flex justify-between items-start flex-wrap gap-2">
+                        <div className="flex-1">
                           <p className="font-semibold">
                             {transaction.type === 'transfer' ? '🔴 Transfer Keluar' : '🟢 Penerimaan'}
                           </p>
@@ -708,7 +760,7 @@ function Dashboard({ user, onLogout }) {
                           {transaction.note && transaction.note !== '-' && (
                             <p className="text-sm text-gray-600">📝 Catatan: {transaction.note}</p>
                           )}
-                          <p className="text-sm text-gray-500">
+                          <p className="text-xs text-gray-500 mt-1">
                             🕐 {new Date(transaction.date).toLocaleString('id-ID')}
                           </p>
                         </div>
@@ -717,7 +769,7 @@ function Dashboard({ user, onLogout }) {
                             {transaction.type === 'transfer' ? '-' : '+'}
                             {formatCurrency(Math.abs(transaction.amount))}
                           </p>
-                          <p className="text-sm text-green-600">✅ Selesai</p>
+                          <p className="text-xs text-green-600">✅ Selesai</p>
                         </div>
                       </div>
                     </div>
@@ -742,15 +794,19 @@ function Dashboard({ user, onLogout }) {
                   </div>
                 </div>
                 <div className="border-t pt-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <p className="text-sm text-gray-600">🆔 ID Pengguna</p>
-                      <p className="font-mono text-sm">{user?.id}</p>
+                      <p className="font-mono text-sm break-all">{user?.id}</p>
                     </div>
                     <div>
                       <p className="text-sm text-gray-600">📅 Bergabung Sejak</p>
                       <p className="text-sm">
-                        {user?.createdAt ? new Date(user.createdAt).toLocaleDateString('id-ID') : '-'}
+                        {user?.createdAt ? new Date(user.createdAt).toLocaleDateString('id-ID', {
+                          day: 'numeric',
+                          month: 'long',
+                          year: 'numeric'
+                        }) : '-'}
                       </p>
                     </div>
                   </div>
